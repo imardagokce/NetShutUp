@@ -1,40 +1,27 @@
 # NetShutUp Modern
 
-This folder contains the planned Windows 10/11 product line for NetShutUp.
+Modern is being developed as a Rust application for Windows 10/11. This branch is the Modern product line; the Legacy product line is maintained separately on the `legacy` branch.
 
-## Goal
+## First milestone: minimal read-only prototype
 
-Provide a lightweight Windows network profile configurator focused on:
+The initial executable only reports the operating-system family and architecture provided by Rust's standard library. It does not inspect adapters, run system commands, request elevation, access the network, or change settings.
 
-- read-only diagnostics first
-- clear user confirmation before applying changes
-- profile-specific configuration for Privacy, Performance, and Balanced modes
-- rollback support and user-readable change previews
+This intentionally small first step gives us a buildable project before adding Windows-specific diagnostics. No compatibility claim is made until the application is tested on the target Windows versions.
 
-## Current milestone
+## Build and run
 
-The first milestone is not changing settings. It is only:
+Install the stable Rust toolchain, then from this directory run:
 
-1. detect Windows version
-2. detect administrator privileges
-3. enumerate network adapters and current relevant settings
-4. summarize findings for the user
-5. show proposed changes before any action is taken
+```sh
+cargo run
+```
 
-## Proposed architecture
+To build without running:
 
-- UI layer: modern Windows desktop UI
-- service layer: system inspection and profile logic
-- rollback layer: preserve previous settings and offer restore actions
-- guard layer: explicit warnings before risky operations
+```sh
+cargo build --release
+```
 
-## Initial guardrails
+## Next step
 
-- no profile change without user confirmation
-- no silent command execution
-- no unsupported profile application on untested OS/build combinations
-- restore point creation is optional and should be treated as recovery support, not a guarantee
-
-## Design principle
-
-This product line is intended to be faster, clearer, and less legacy-dependent than the older branch. It should focus on current Windows behavior and modern compatibility while maintaining a disciplined safety-first flow.
+Add a read-only Windows version/build diagnostic and tests. Only after that is verified should we enumerate network adapters. Profile changes and rollback are out of scope for this prototype.
