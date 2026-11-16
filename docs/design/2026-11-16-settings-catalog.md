@@ -1,6 +1,6 @@
 # Milestone 3 — Ayar Kataloğu ve Mevcut Durumu Okuma
 
-Durum: **onaylandı, ilk dilim uygulandı** · 2026-11-16
+Durum: **onaylandı, uygulandı (iki dilim de)** · 2026-11-16
 
 ## Amaç ve neden
 
@@ -133,8 +133,10 @@ Bunlar konuşmada kararlaştırılmadı; itiraz edilebilir:
 - Varsayılan değerler kodlanmadan önce Microsoft belgelerinden doğrulanır.
 - Tek `.exe` ek DLL istemesin diye C çalışma zamanı statik bağlanır (`modern/.cargo/config.toml`).
 
-## İkinci dilim (ayrı iş)
+## İkinci dilim (uygulandı)
 
 TCP genel ayarları (autotuning, ECN, RSS). Bunlar kayıt defterinde düz bir
 değer olarak durmuyor; Windows'un yönetim arayüzünden (WMI) okunmaları
-gerekiyor. Daha karmaşık olduğu için ilk dilim bittikten sonra ele alınacak.
+gerekiyor. Eklenen ayarlar: `tcp.autotuning`, `tcp.ecn`, `tcp.congestion_provider`,
+`offload.rss`, `offload.rsc`. ECN ve congestion provider varsayılanları henüz
+doğrulanmadığı için etiketsiz gösterilir.

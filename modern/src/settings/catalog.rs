@@ -16,6 +16,8 @@ pub enum Source {
     RegDword { key: &'static str, value: &'static str },
     RegString { key: &'static str, value: &'static str },
     Service { name: &'static str },
+    /// Integer property of a WMI object in `ROOTStandardCimv2`.
+    Wmi { class: &'static str, filter: Option<&'static str>, property: &'static str },
 }
 
 /// What a stock Windows installation has for a setting.
@@ -109,7 +111,75 @@ pub static CATALOG: &[Setting] = &[
         default: Some(DefaultValue::ServiceStartType(2)),
         labels: &[],
     },
+    Setting {
+        id: "tcp.autotuning",
+        name: "TCP receive auto-tuning",
+        scope: Scope::System,
+        source: Source::Wmi {
+            class: TCP_SETTING,
+            filter: INTERNET_TEMPLATE,
+            property: "AutoTuningLevelLocal",
+        },
+        default: Some(DefaultValue::Dword(3)),
+        labels: &[
+            (0, "disabled"),
+            (1, "highly restricted"),
+            (2, "restricted"),
+            (3, "normal"),
+            (4, "experimental"),
+        ],
+    },
+    Setting {
+        id: "tcp.ecn",
+        name: "TCP ECN capability",
+        scope: Scope::System,
+        source: Source::Wmi {
+            class: TCP_SETTING,
+            filter: INTERNET_TEMPLATE,
+            property: "EcnCapability",
+        },
+        default: None,
+        labels: &[(0, "disabled"), (1, "enabled")],
+    },
+    Setting {
+        id: "tcp.congestion_provider",
+        name: "TCP congestion provider",
+        scope: Scope::System,
+        source: Source::Wmi {
+            class: TCP_SETTING,
+            filter: INTERNET_TEMPLATE,
+            property: "CongestionProvider",
+        },
+        default: None,
+        labels: &[(5, "CUBIC")],
+    },
+    Setting {
+        id: "offload.rss",
+        name: "Receive-side scaling",
+        scope: Scope::System,
+        source: Source::Wmi { class: OFFLOAD_SETTING, filter: None, property: "ReceiveSideScaling" },
+        default: Some(DefaultValue::Dword(1)),
+        labels: ON_OFF,
+    },
+    Setting {
+        id: "offload.rsc",
+        name: "Receive segment coalescing",
+        scope: Scope::System,
+        source: Source::Wmi {
+            class: OFFLOAD_SETTING,
+            filter: None,
+            property: "ReceiveSegmentCoalescing",
+        },
+        default: Some(DefaultValue::Dword(1)),
+        labels: ON_OFF,
+    },
 ];
+
+const TCP_SETTING: &str = "MSFT_NetTCPSetting";
+/// The TCP template Windows applies to ordinary internet connections.
+const INTERNET_TEMPLATE: Option<&str> = Some("SettingName = 'Internet'");
+const OFFLOAD_SETTING: &str = "MSFT_NetOffloadGlobalSetting";
+const ON_OFF: &[(u32, &str)] = &[(0, "disabled"), (1, "enabled")];
 
 #[cfg(test)]
 mod tests {
@@ -129,7 +199,7 @@ mod tests {
         for setting in CATALOG {
             let key = match setting.source {
                 Source::RegDword { key, .. } | Source::RegString { key, .. } => key,
-                Source::Service { .. } => continue,
+                Source::Service { .. } | Source::Wmi { .. } => continue,
             };
             assert_eq!(
                 key.contains(ADAPTER_GUID),

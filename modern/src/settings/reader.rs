@@ -14,6 +14,7 @@ use windows::Win32::System::Services::{
 use windows::core::{HSTRING, PCWSTR};
 
 use super::catalog::{ADAPTER_GUID, DefaultValue, Setting, Source};
+use super::wmi;
 
 const ERROR_SUCCESS: u32 = 0;
 const ERROR_FILE_NOT_FOUND: u32 = 2;
@@ -52,6 +53,11 @@ pub fn read(setting: &Setting, adapter_guid: Option<&str>) -> State {
         Source::RegDword { key, value } => read_reg_dword(&resolve(key), value),
         Source::RegString { key, value } => read_reg_string(&resolve(key), value),
         Source::Service { name } => read_service(name),
+        Source::Wmi { class, filter, property } => match wmi::query_u32(class, filter, property) {
+            Ok(Some(number)) => State::Value(Value::Dword(number)),
+            Ok(None) => State::Unavailable("no value reported".to_string()),
+            Err(reason) => State::Unavailable(reason),
+        },
     }
 }
 
