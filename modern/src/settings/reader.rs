@@ -102,6 +102,17 @@ pub fn format(setting: &Setting, state: &State) -> String {
     }
 }
 
+/// Renders a state that a profile asks for. A service is shown by start type
+/// alone, because that is all a profile decides.
+pub fn format_desired(setting: &Setting, state: &State) -> String {
+    match state {
+        State::Value(Value::Service { start_type, .. }) => {
+            service_start_type_name(*start_type).to_string()
+        }
+        other => format(setting, other),
+    }
+}
+
 /// Windows stores address lists separated by commas or spaces.
 pub(super) fn normalize_list(raw: &str) -> String {
     raw.split([',', ' '])

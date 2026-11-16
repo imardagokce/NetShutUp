@@ -14,7 +14,9 @@ const ERROR_NO_DATA: u32 = 232;
 /// Address family filter for `GetAdaptersAddresses`: both IPv4 and IPv6.
 const AF_UNSPEC: u32 = 0;
 
+const IF_TYPE_ETHERNET: u32 = 6;
 const IF_TYPE_LOOPBACK: u32 = 24;
+const IF_TYPE_WIFI: u32 = 71;
 
 pub struct NetworkAdapter {
     /// User-facing connection name, e.g. "Ethernet" or "Wi-Fi".
@@ -27,6 +29,9 @@ pub struct NetworkAdapter {
     pub adapter_type: &'static str,
     pub is_up: bool,
     pub is_loopback: bool,
+    /// Ethernet or Wi-Fi: the adapters a profile's per-adapter settings are
+    /// applied to. Tunnels and other virtual types are left alone.
+    pub takes_profile_settings: bool,
 }
 
 /// Lists the system's network adapters via `GetAdaptersAddresses`.
@@ -95,6 +100,7 @@ pub fn get_network_adapters() -> Result<Vec<NetworkAdapter>, u32> {
             adapter_type: adapter_type_name(info.IfType),
             is_up: info.OperStatus == IfOperStatusUp,
             is_loopback: info.IfType == IF_TYPE_LOOPBACK,
+            takes_profile_settings: matches!(info.IfType, IF_TYPE_ETHERNET | IF_TYPE_WIFI),
         });
 
         current = info.Next;

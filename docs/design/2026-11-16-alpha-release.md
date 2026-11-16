@@ -1,10 +1,10 @@
 # Alpha Sürümü — Yedekleme, Profiller ve Terminal Arayüzü
 
-Durum: **uygulanıyor — aşama 1 tamam** · 2026-11-16 · Hedef sürüm: `0.1.0-alpha.1`
+Durum: **uygulanıyor — aşama 2 tamam** · 2026-11-16 · Hedef sürüm: `0.1.0-alpha.1`
 
-Onay durumu: terminal arayüzü (yol 2) Arda tarafından onaylandı. Profil
-tablosu ve güvenlik duvarı kapsamı hâlâ Arda'nın gözden geçirmesine açık;
-ilgili aşamalar başlamadan önce kesinleşir.
+Onay durumu: terminal arayüzü (yol 2), profil tablosu ve güvenlik duvarı
+kapsamı Arda tarafından onaylandı. Güvenlik duvarı Arda'nın kararıyla tüm
+profillere genişletildi (aşağıya bakın).
 
 ## Amaç ve neden
 
@@ -52,7 +52,7 @@ her şey GUI geldiğinde aynen kullanılır; yalnızca terminal ekranı değişi
 | **2. Yönlendirmeli menü (öneri)** | Ok tuşlarıyla seçim, renkli tablolar, onay soruları | Derli toplu görünür, az bağımlılık, GUI gelince atılacak kod az |
 | 3. Tam ekran panel arayüzü | Pencereli, bölmeli, canlı güncellenen ekran | En şık; ama fiilen ikinci bir arayüz yazmak demek, GUI gelince çöpe gider |
 
-Öneri: **2**. Arda'nın onayı bekleniyor.
+Seçilen: **2** (Arda onayladı).
 
 ```
  NetShutUp 0.1.0-alpha.1            Windows 11 (build 26200) · not elevated
@@ -114,24 +114,42 @@ her şey GUI geldiğinde aynen kullanılır; yalnızca terminal ekranı değişi
 
 ### Profiller
 
-Aşağıdaki liste **adaydır**. Her satırın kayıt defteri yolu, varsayılanı ve
-etkisi kodlanmadan önce Microsoft belgelerinden doğrulanır; doğrulanamayan
-satır alpha'ya girmez.
+Her satırın kayıt defteri yolu, varsayılanı ve etkisi kodlanmadan önce
+Microsoft belgelerinden doğrulandı; doğrulanamayan satır alpha'ya girmedi.
+Profiller `modern/profiles/*.json` dosyalarındadır ve `.exe`'ye gömülür.
 
 | Ayar | Privacy | Performance | Recommended | Yan etki riski |
 |------|:-------:|:-----------:|:-----------:|----------------|
-| DNS sağlayıcısı | Quad9 | en hızlı ölçülen | Cloudflare (ölçüm başka birini açıkça öne çıkarırsa o) | Düşük |
-| Şifreli DNS (DoH) | açık, şifresize düşmek yasak | açık | açık | Düşük; aşağıya bakın |
+| DNS sağlayıcısı (aşama 5) | Quad9 | en hızlı ölçülen | Cloudflare (ölçüm başka birini açıkça öne çıkarırsa o) | Düşük |
+| Şifreli DNS (DoH) (aşama 5) | açık, şifresize düşmek yasak | açık | açık | Düşük; aşağıya bakın |
+| Güvenlik duvarı (aşama 6) | temel + sıkı (onayla) | temel | temel | Aşağıya bakın |
 | Telemetri servisi (DiagTrack) | kapalı | — | — | Düşük |
-| Telemetri düzeyi ilkesi | en düşük | — | — | Düşük |
+| Telemetri düzeyi ilkesi | en düşük | — | — | Düşük; Ayarlar'da "kuruluşunuz yönetiyor" yazar, Insider sürümleri alınamaz |
 | LLMNR (yerel ağda isim yayını) | kapalı | — | kapalı | Düşük |
-| Akıllı çoklu-ağ isim çözümü | kapalı | — | — | Düşük; VPN'de DNS sızıntısını önler |
 | Delivery Optimization (güncellemeleri başkalarına yükleme) | kapalı | kapalı | kapalı | Düşük |
-| Nagle (ACK sıklığı + gecikmesiz gönderim) | — | kapalı | — | Düşük; yalnızca TCP kullanan oyun/uygulamada fark eder |
+| Gecikmeli ACK (TcpAckFrequency) | — | kapalı | — | Düşük; yeniden başlatma ister, yalnızca TCP kullanan oyun/uygulamada fark eder |
 | Ağ kısıtlaması (NetworkThrottlingIndex) | — | kapalı | — | Düşük |
+
+Doğrulama notları:
+
+- **Telemetri düzeyi** `AllowTelemetry = 0` yazılır. Microsoft'a göre 0
+  yalnızca Enterprise/Education'da "kapalı" demektir; Home ve Pro'da 1
+  ("zorunlu veriler") ile eşdeğerdir. Yani her sürümde izin verilen en düşük
+  düzey; Home'da telemetriyi tamamen kapatmaz ve program bunu iddia etmez.
+- **LLMNR** `EnableMulticast = 0`, **Delivery Optimization**
+  `DODownloadMode = 0` (yalnızca HTTP, eşler arası yok).
+- **TcpAckFrequency** Microsoft belgesinde var (varsayılan 2, yeniden
+  başlatma gerekir).
 
 Bilerek alınmayanlar:
 
+- **`TCPNoDelay` (adaptör başına)** — YouTube rehberlerinin "Nagle'ı kapat"
+  diye yazdırdığı ikinci değer. Microsoft bu değeri yalnızca MSMQ için
+  belgeliyor; adaptör anahtarı altında bir etkisi olduğuna dair resmî kaynak
+  bulunamadı. Katalogda kalır (kullanıcı görsün diye), profile girmez.
+- **Akıllı çoklu-ağ isim çözümünü kapatmak** — ilkenin Home sürümünde
+  uygulandığı ve Windows 10/11'de VPN DNS sızıntısını gerçekten önlediği
+  doğrulanamadı. Sızıntı koruması DoH ile sağlanır.
 - **QoS bant genişliği "tweak"i** — modern Windows'ta etkisiz.
 - **Auto-tuning'i kapatmak** — indirme hızını düşürür; zararlı.
 - **NetBIOS'u kapatmak, NCSI bağlantı denetimini kapatmak** — eski ağ
@@ -163,17 +181,31 @@ engeller. DoH'un çalışmadığı bir ağda DoT'un çalışması beklenmez. Ayr
 Windows'ta DoT desteği DoH'tan daha yeni ve daha az yaygın. Bu yüzden
 "DoH olmadı → başka sağlayıcıyla DoH → eski haline dön" sırası daha güvenli.
 
-### Güvenlik duvarı (yalnızca Privacy)
+### Güvenlik duvarı (tüm profiller, iki kademe)
 
-Arda'nın isteği: Privacy profili, profille orantılı güvenlik duvarı ayarları
-da yapsın. Mümkün; aday kapsam:
+Arda'nın kararı: güvenlik duvarı ayarları tüm profillerde olsun; Recommended
+ve Performance'ta günlük kullanımı bozmayacak kadar, Privacy'de daha sıkı ve
+kullanıcının onayıyla.
+
+**Temel kademe — tüm profiller.** Windows'un kendi varsayılanına döndürür,
+yeni bir kısıtlama getirmez:
 
 1. Windows Güvenlik Duvarı üç ağ türünde de (Domain / Private / Public) açık
-   ve gelen bağlantılar varsayılan olarak engelli olsun.
+   ve gelen bağlantılar varsayılan olarak engelli olsun. Mevcut izin
+   kuralları (oyunlar, paylaşım, yazıcı) olduğu gibi çalışmaya devam eder.
+
+**Sıkı kademe — yalnızca Privacy, ayrıca sorularak.** Normal önizlemenin
+parçası değildir; kullanıcı her birine ayrı ayrı "evet" der:
+
 2. Telemetri servisinin dışarıya bağlanmasını engelleyen, programın kendi
    adını taşıyan bir kural.
 3. "Public" ağlarda ağ keşfi, dosya/yazıcı paylaşımı ve uzaktan yardım için
    hazır gelen kuralların kapatılması.
+
+Aşama 6'da doğrulanacak: bilgisayarda başka bir güvenlik duvarı (antivirüs
+paketi) kayıtlıysa Windows Güvenlik Duvarı'nı o yönetiyor olabilir. Bu durumda
+temel kademe atlanır ve kullanıcıya nedeni söylenir; iki duvarın çakışması
+bağlantıyı bozabilir.
 
 Yapılmayacak: **alan adına göre engelleme**. Windows Güvenlik Duvarı alan adı
 bilmez, yalnızca IP / program / servis bilir; telemetri sunucularının IP'leri
@@ -183,9 +215,9 @@ enterprise için düşünülen özel DNS fikrine bağlanır.
 Geri alma: programın eklediği kurallar kendi grup adıyla işaretlenir ve geri
 almada silinir; kapatılan hazır kuralların önceki durumu yedeğe yazılır.
 
-Risk: orta. Tüm sürümde yan etki üretme ihtimali en yüksek kısım budur
-(paylaşım, yazıcı, cihaza yayın bozulabilir). Bu yüzden ayrı bir aşamadır ve
-madde 3 uygulanmadan önce kullanıcıya ayrıca sorulur.
+Risk: temel kademe düşük, sıkı kademe orta. Tüm sürümde yan etki üretme
+ihtimali en yüksek kısım madde 3'tür (paylaşım, yazıcı, cihaza yayın
+bozulabilir); bu yüzden ayrı bir aşamadır ve ayrıca sorulur.
 
 ### Geliştirme sırasında güvenlik
 
@@ -201,11 +233,12 @@ madde 3 uygulanmadan önce kullanıcıya ayrıca sorulur.
 Her aşama kendi başına çalışır, test edilir ve commit edilir:
 
 1. ✅ Yazma + yedekleme + geri alma motoru (deneme anahtarında testlerle)
-2. Yeni katalog ayarları (doğrulanarak) + gömülü profiller + önizleme
-3. Yönetici yükseltme + uygulama/geri alma akışı
+2. ✅ Yeni katalog ayarları (doğrulanarak) + gömülü profiller + önizleme
+   (`netshutup-modern.exe preview <profil>`; hiçbir şey yazmaz)
+3. Yönetici yükseltme + servis yazma desteği + uygulama/geri alma akışı
 4. Terminal menüsü
 5. DNS sağlayıcısı + DoH + bağlantı denemesi ve otomatik geri dönüş
-6. Güvenlik duvarı (Privacy)
+6. Güvenlik duvarı (temel kademe tüm profiller, sıkı kademe Privacy)
 7. Sürüm numarası, README'de kullanım ve "alpha" uyarısı, GitHub ön-sürüm
 
 ## Claude'un verdiği kararlar
@@ -222,7 +255,11 @@ Konuşmada kararlaştırılmadı; itiraz edilebilir:
 - TCP genel ayarları alpha'da salt okunur.
 - Yedek kısmen başarısız olursa otomatik geri alma.
 
+- Profil ayarları yalnızca Ethernet ve Wi-Fi türündeki adaptörlere uygulanır
+  (tünel ve diğer sanal türler atlanır).
+- Doğrulanamayan iki aday (`TCPNoDelay`, akıllı çoklu-ağ isim çözümü)
+  profillerden çıkarıldı.
+
 ## Açık sorular
 
-1. Terminal arayüzü için yol 2 uygun mu?
-2. Profil tablosunda eklemek ya da çıkarmak istediğin satır var mı?
+Yok. Önceki ikisi (terminal arayüzü, profil tablosu) Arda'nın onayıyla kapandı.

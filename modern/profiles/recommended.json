@@ -1,0 +1,9 @@
+{
+  "id": "recommended",
+  "name": "Recommended",
+  "description": "Safe, widely useful tweaks that do not get in the way of daily use",
+  "settings": [
+    { "id": "dns.llmnr", "set": { "dword": 0 } },
+    { "id": "update.delivery_optimization", "set": { "dword": 0 } }
+  ]
+}

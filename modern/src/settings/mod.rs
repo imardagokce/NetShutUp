@@ -5,6 +5,7 @@
 pub mod apply;
 pub mod backup;
 pub mod catalog;
+pub mod profile;
 pub mod reader;
 pub mod registry;
 pub mod store;

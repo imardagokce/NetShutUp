@@ -1,0 +1,11 @@
+{
+  "id": "privacy",
+  "name": "Privacy",
+  "description": "Less telemetry and fewer name leaks on the local network",
+  "settings": [
+    { "id": "service.diagtrack", "set": { "start_type": 4 } },
+    { "id": "privacy.telemetry_level", "set": { "dword": 0 } },
+    { "id": "dns.llmnr", "set": { "dword": 0 } },
+    { "id": "update.delivery_optimization", "set": { "dword": 0 } }
+  ]
+}

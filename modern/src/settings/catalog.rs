@@ -64,11 +64,11 @@ pub fn find(id: &str) -> Option<&'static Setting> {
 pub static CATALOG: &[Setting] = &[
     Setting {
         id: "tcp.nagle.ack_frequency",
-        name: "Nagle: ACK frequency",
+        name: "Delayed ACK frequency",
         scope: Scope::Adapter,
         source: Source::RegDword { key: TCPIP_INTERFACE, value: "TcpAckFrequency" },
         default: Some(DefaultValue::Dword(2)),
-        labels: &[],
+        labels: &[(1, "every packet (no delay)")],
     },
     Setting {
         id: "tcp.nagle.no_delay",
@@ -120,6 +120,48 @@ pub static CATALOG: &[Setting] = &[
         source: Source::Service { name: "DiagTrack" },
         default: Some(DefaultValue::ServiceStartType(2)),
         labels: &[],
+    },
+    Setting {
+        id: "privacy.telemetry_level",
+        name: "Diagnostic data policy",
+        scope: Scope::System,
+        source: Source::RegDword {
+            key: r"SOFTWARE\Policies\Microsoft\Windows\DataCollection",
+            value: "AllowTelemetry",
+        },
+        default: Some(DefaultValue::Unset),
+        // 0 turns diagnostic data off only on Enterprise and Education;
+        // Windows treats it as 1 on Home and Pro.
+        labels: &[(0, "lowest allowed"), (1, "required only"), (2, "enhanced"), (3, "optional")],
+    },
+    Setting {
+        id: "dns.llmnr",
+        name: "LLMNR name broadcast",
+        scope: Scope::System,
+        source: Source::RegDword {
+            key: r"SOFTWARE\Policies\Microsoft\Windows NT\DNSClient",
+            value: "EnableMulticast",
+        },
+        default: Some(DefaultValue::Unset),
+        labels: ON_OFF,
+    },
+    Setting {
+        id: "update.delivery_optimization",
+        name: "Update sharing (P2P)",
+        scope: Scope::System,
+        source: Source::RegDword {
+            key: r"SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization",
+            value: "DODownloadMode",
+        },
+        default: Some(DefaultValue::Unset),
+        labels: &[
+            (0, "off (HTTP only)"),
+            (1, "local network"),
+            (2, "group"),
+            (3, "internet"),
+            (99, "off (no cloud)"),
+            (100, "bypass"),
+        ],
     },
     Setting {
         id: "tcp.autotuning",

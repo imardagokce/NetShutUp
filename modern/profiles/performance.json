@@ -1,0 +1,10 @@
+{
+  "id": "performance",
+  "name": "Performance",
+  "description": "Lower latency for games and real-time apps",
+  "settings": [
+    { "id": "tcp.nagle.ack_frequency", "set": { "dword": 1 } },
+    { "id": "mm.network_throttling", "set": { "dword": 4294967295 } },
+    { "id": "update.delivery_optimization", "set": { "dword": 0 } }
+  ]
+}
