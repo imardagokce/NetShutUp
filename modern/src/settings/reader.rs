@@ -1,36 +1,31 @@
-//! Reads the current value of catalog settings. Strictly read-only: registry
-//! values are fetched with `RegGetValueW` and services are opened with query
-//! rights only.
+//! Value types for catalog settings, plus how they are compared to the
+//! Windows default and rendered. Also reads Windows service state.
 
-use std::ffi::c_void;
-
-use windows::Win32::System::Registry::{
-    HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
-};
 use windows::Win32::System::Services::{
     CloseServiceHandle, OpenSCManagerW, OpenServiceW, QUERY_SERVICE_CONFIGW, QueryServiceConfigW,
     QueryServiceStatus, SERVICE_STATUS,
 };
 use windows::core::{HSTRING, PCWSTR};
 
-use super::catalog::{ADAPTER_GUID, DefaultValue, Setting, Source};
-use super::wmi;
+use serde::{Deserialize, Serialize};
 
-const ERROR_SUCCESS: u32 = 0;
-const ERROR_FILE_NOT_FOUND: u32 = 2;
+use super::catalog::{DefaultValue, Setting};
+
 
 const SC_MANAGER_CONNECT: u32 = 0x0001;
 const SERVICE_QUERY_CONFIG: u32 = 0x0001;
 const SERVICE_QUERY_STATUS: u32 = 0x0004;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Value {
     Dword(u32),
     Text(String),
     Service { state: u32, start_type: u32 },
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum State {
     /// Nothing is configured; the Windows default applies.
     NotSet,
@@ -45,22 +40,6 @@ pub enum Origin {
     Unknown,
 }
 
-/// Reads a setting. `adapter_guid` is required for adapter-scoped settings.
-pub fn read(setting: &Setting, adapter_guid: Option<&str>) -> State {
-    let resolve = |key: &str| key.replace(ADAPTER_GUID, adapter_guid.unwrap_or_default());
-
-    match setting.source {
-        Source::RegDword { key, value } => read_reg_dword(&resolve(key), value),
-        Source::RegString { key, value } => read_reg_string(&resolve(key), value),
-        Source::Service { name } => read_service(name),
-        Source::Wmi { class, filter, property } => match wmi::query_u32(class, filter, property) {
-            Ok(Some(number)) => State::Value(Value::Dword(number)),
-            Ok(None) => State::Unavailable("no value reported".to_string()),
-            Err(reason) => State::Unavailable(reason),
-        },
-    }
-}
-
 /// Compares a state against the setting's Windows default.
 pub fn classify(setting: &Setting, state: &State) -> Origin {
     let value = match state {
@@ -70,6 +49,8 @@ pub fn classify(setting: &Setting, state: &State) -> Origin {
     };
 
     let is_default = match (&setting.default, value) {
+        // An empty string configures nothing, exactly like a missing value.
+        (Some(DefaultValue::Unset), Value::Text(text)) => text.trim().is_empty(),
         (Some(DefaultValue::Unset), _) => false,
         (Some(DefaultValue::Dword(default)), Value::Dword(current)) => default == current,
         (Some(DefaultValue::ServiceStartType(default)), Value::Service { start_type, .. }) => {
@@ -79,6 +60,23 @@ pub fn classify(setting: &Setting, state: &State) -> Origin {
     };
 
     if is_default { Origin::Default } else { Origin::Changed }
+}
+
+/// Whether `actual` already satisfies `desired`. Address lists match
+/// regardless of separator; services match on start type.
+pub fn matches(desired: &State, actual: &State) -> bool {
+    match (desired, actual) {
+        (State::NotSet, State::NotSet) => true,
+        (State::Value(Value::Dword(want)), State::Value(Value::Dword(have))) => want == have,
+        (State::Value(Value::Text(want)), State::Value(Value::Text(have))) => {
+            normalize_list(want) == normalize_list(have)
+        }
+        (
+            State::Value(Value::Service { start_type: want, .. }),
+            State::Value(Value::Service { start_type: have, .. }),
+        ) => want == have,
+        _ => false,
+    }
 }
 
 /// Renders a state for display.
@@ -92,7 +90,10 @@ pub fn format(setting: &Setting, state: &State) -> String {
             .find(|(labelled, _)| labelled == number)
             .map(|(_, label)| label.to_string())
             .unwrap_or_else(|| number.to_string()),
-        State::Value(Value::Text(text)) => text.clone(),
+        State::Value(Value::Text(text)) => match normalize_list(text) {
+            list if list.is_empty() => "not set".to_string(),
+            list => list,
+        },
         State::Value(Value::Service { state, start_type }) => format!(
             "{}, {}",
             service_state_name(*state),
@@ -101,67 +102,15 @@ pub fn format(setting: &Setting, state: &State) -> String {
     }
 }
 
-fn read_reg_dword(key: &str, value: &str) -> State {
-    let mut data: u32 = 0;
-    let mut size = std::mem::size_of::<u32>() as u32;
-
-    let result = unsafe {
-        RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            &HSTRING::from(key),
-            &HSTRING::from(value),
-            RRF_RT_REG_DWORD,
-            None,
-            Some((&raw mut data).cast::<c_void>()),
-            Some(&mut size),
-        )
-    };
-
-    match result.0 {
-        ERROR_SUCCESS => State::Value(Value::Dword(data)),
-        ERROR_FILE_NOT_FOUND => State::NotSet,
-        code => State::Unavailable(format!("registry error {code}")),
-    }
-}
-
-fn read_reg_string(key: &str, value: &str) -> State {
-    let mut buffer = [0u16; 1024];
-    let mut size = std::mem::size_of_val(&buffer) as u32;
-
-    let result = unsafe {
-        RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            &HSTRING::from(key),
-            &HSTRING::from(value),
-            RRF_RT_REG_SZ,
-            None,
-            Some(buffer.as_mut_ptr().cast::<c_void>()),
-            Some(&mut size),
-        )
-    };
-
-    match result.0 {
-        ERROR_SUCCESS => {
-            let len = buffer.iter().position(|&unit| unit == 0).unwrap_or(buffer.len());
-            match normalize_list(&String::from_utf16_lossy(&buffer[..len])) {
-                text if text.is_empty() => State::NotSet,
-                text => State::Value(Value::Text(text)),
-            }
-        }
-        ERROR_FILE_NOT_FOUND => State::NotSet,
-        code => State::Unavailable(format!("registry error {code}")),
-    }
-}
-
 /// Windows stores address lists separated by commas or spaces.
-fn normalize_list(raw: &str) -> String {
+pub(super) fn normalize_list(raw: &str) -> String {
     raw.split([',', ' '])
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-fn read_service(name: &str) -> State {
+pub(super) fn read_service(name: &str) -> State {
     let unavailable = |error: windows::core::Error| {
         State::Unavailable(format!("service error {}", error.code().0 as u32 & 0xFFFF))
     };
@@ -237,7 +186,7 @@ fn service_start_type_name(start_type: u32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::catalog::{CATALOG, Scope};
+    use crate::settings::catalog::CATALOG;
 
     fn setting(id: &str) -> &'static Setting {
         CATALOG.iter().find(|setting| setting.id == id).unwrap()
@@ -258,6 +207,9 @@ mod tests {
 
     #[test]
     fn any_static_dns_is_a_change() {
+        let empty = State::Value(Value::Text(String::new()));
+        assert_eq!(classify(setting("dns.static_servers"), &empty), Origin::Default);
+        assert_eq!(format(setting("dns.static_servers"), &empty), "not set");
         let state = State::Value(Value::Text("9.9.9.9".into()));
         assert_eq!(classify(setting("dns.static_servers"), &state), Origin::Changed);
     }
@@ -289,25 +241,5 @@ mod tests {
         assert_eq!(normalize_list("9.9.9.9,149.112.112.112"), "9.9.9.9, 149.112.112.112");
         assert_eq!(normalize_list("1.1.1.1 1.0.0.1"), "1.1.1.1, 1.0.0.1");
         assert_eq!(normalize_list(""), "");
-    }
-
-    #[test]
-    fn missing_registry_value_reads_as_not_set() {
-        assert_eq!(
-            read_reg_dword(r"SOFTWARE\NetShutUp\DoesNotExist", "Missing"),
-            State::NotSet
-        );
-    }
-
-    #[test]
-    fn every_system_setting_can_be_read() {
-        for setting in CATALOG.iter().filter(|s| s.scope == Scope::System) {
-            let state = read(setting, None);
-            assert!(
-                !matches!(state, State::Unavailable(_)),
-                "{}: {state:?}",
-                setting.id
-            );
-        }
     }
 }

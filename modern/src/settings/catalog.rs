@@ -30,8 +30,6 @@ pub enum DefaultValue {
 }
 
 pub struct Setting {
-    // Read by profiles and backups from Milestone 4 on.
-    #[allow(dead_code)]
     pub id: &'static str,
     pub name: &'static str,
     pub scope: Scope,
@@ -50,6 +48,18 @@ const TCPIP_INTERFACE: &str =
     r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{guid}";
 const SYSTEM_PROFILE: &str =
     r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile";
+
+impl Setting {
+    /// Whether the program can change this setting, not just display it.
+    pub fn is_writable(&self) -> bool {
+        matches!(self.source, Source::RegDword { .. } | Source::RegString { .. })
+    }
+}
+
+/// Looks a setting up by its id.
+pub fn find(id: &str) -> Option<&'static Setting> {
+    CATALOG.iter().find(|setting| setting.id == id)
+}
 
 pub static CATALOG: &[Setting] = &[
     Setting {

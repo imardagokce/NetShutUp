@@ -5,6 +5,7 @@ mod version;
 use adapters::NetworkAdapter;
 use settings::catalog::{CATALOG, Scope};
 use settings::reader::{self, Origin};
+use settings::store::{Store, SystemStore};
 
 fn main() {
     let version = version::get_windows_version();
@@ -40,9 +41,10 @@ fn print_adapters(adapters: &[NetworkAdapter]) {
 }
 
 fn print_settings(title: &str, scope: Scope, adapter_guid: Option<&str>) {
+    let store = SystemStore::system();
     println!("\nSettings — {title}");
     for setting in CATALOG.iter().filter(|setting| setting.scope == scope) {
-        let state = reader::read(setting, adapter_guid);
+        let state = store.read(setting, adapter_guid);
         let origin = match reader::classify(setting, &state) {
             Origin::Default => "(Windows default)",
             Origin::Changed => "(changed from default)",
