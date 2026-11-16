@@ -1,6 +1,6 @@
 # NetShutUp
 
-Windows network settings configurator - Privacy, Performance & Balanced profiles.
+Windows network settings configurator - Privacy, Performance & Recommended profiles.
 
 This repository is organized into two product lines:
 
