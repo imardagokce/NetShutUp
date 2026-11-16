@@ -1,20 +1,10 @@
 //! Value types for catalog settings, plus how they are compared to the
-//! Windows default and rendered. Also reads Windows service state.
-
-use windows::Win32::System::Services::{
-    CloseServiceHandle, OpenSCManagerW, OpenServiceW, QUERY_SERVICE_CONFIGW, QueryServiceConfigW,
-    QueryServiceStatus, SERVICE_STATUS,
-};
-use windows::core::{HSTRING, PCWSTR};
+//! Windows default and rendered.
 
 use serde::{Deserialize, Serialize};
 
 use super::catalog::{DefaultValue, Setting};
-
-
-const SC_MANAGER_CONNECT: u32 = 0x0001;
-const SERVICE_QUERY_CONFIG: u32 = 0x0001;
-const SERVICE_QUERY_STATUS: u32 = 0x0004;
+use super::service;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -96,8 +86,8 @@ pub fn format(setting: &Setting, state: &State) -> String {
         },
         State::Value(Value::Service { state, start_type }) => format!(
             "{}, {}",
-            service_state_name(*state),
-            service_start_type_name(*start_type)
+            service::state_name(*state),
+            service::start_type_name(*start_type)
         ),
     }
 }
@@ -107,7 +97,7 @@ pub fn format(setting: &Setting, state: &State) -> String {
 pub fn format_desired(setting: &Setting, state: &State) -> String {
     match state {
         State::Value(Value::Service { start_type, .. }) => {
-            service_start_type_name(*start_type).to_string()
+            service::start_type_name(*start_type).to_string()
         }
         other => format(setting, other),
     }
@@ -119,79 +109,6 @@ pub(super) fn normalize_list(raw: &str) -> String {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-pub(super) fn read_service(name: &str) -> State {
-    let unavailable = |error: windows::core::Error| {
-        State::Unavailable(format!("service error {}", error.code().0 as u32 & 0xFFFF))
-    };
-
-    unsafe {
-        let manager = match OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_CONNECT) {
-            Ok(handle) => handle,
-            Err(error) => return unavailable(error),
-        };
-
-        let state = match OpenServiceW(
-            manager,
-            &HSTRING::from(name),
-            SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG,
-        ) {
-            Ok(service) => {
-                let mut status = SERVICE_STATUS::default();
-                // u64 storage keeps the buffer aligned; 8 KB is the API maximum.
-                let mut config = vec![0u64; 1024];
-                let mut needed = 0u32;
-
-                let queried = QueryServiceStatus(service, &mut status).and_then(|()| {
-                    QueryServiceConfigW(
-                        service,
-                        Some(config.as_mut_ptr().cast::<QUERY_SERVICE_CONFIGW>()),
-                        (config.len() * 8) as u32,
-                        &mut needed,
-                    )
-                });
-
-                let _ = CloseServiceHandle(service);
-
-                match queried {
-                    Ok(()) => {
-                        let config = &*config.as_ptr().cast::<QUERY_SERVICE_CONFIGW>();
-                        State::Value(Value::Service {
-                            state: status.dwCurrentState.0,
-                            start_type: config.dwStartType.0,
-                        })
-                    }
-                    Err(error) => unavailable(error),
-                }
-            }
-            Err(error) => unavailable(error),
-        };
-
-        let _ = CloseServiceHandle(manager);
-        state
-    }
-}
-
-fn service_state_name(state: u32) -> &'static str {
-    match state {
-        1 => "Stopped",
-        2 => "Starting",
-        3 => "Stopping",
-        4 => "Running",
-        7 => "Paused",
-        _ => "Other",
-    }
-}
-
-fn service_start_type_name(start_type: u32) -> &'static str {
-    match start_type {
-        0 | 1 => "Driver",
-        2 => "Automatic",
-        3 => "Manual",
-        4 => "Disabled",
-        _ => "Other",
-    }
 }
 
 #[cfg(test)]

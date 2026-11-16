@@ -55,6 +55,24 @@ pub fn plan(store: &dyn Store, targets: Vec<Target>) -> Vec<PlannedChange> {
         .collect()
 }
 
+/// Why a plan cannot be applied, if it cannot. `apply` refuses such a plan;
+/// call this first to tell the user before asking for confirmation.
+pub fn check(plan: &[PlannedChange]) -> Result<(), String> {
+    for change in plan.iter().filter(|change| change.is_needed()) {
+        let id = change.target.setting.id;
+        if !change.target.setting.is_writable() {
+            return Err(format!("{id} is read-only"));
+        }
+        if let State::Unavailable(reason) = &change.current {
+            return Err(format!("{id} cannot be backed up because it cannot be read ({reason})"));
+        }
+        if matches!(change.target.desired, State::Unavailable(_)) {
+            return Err(format!("{id} has no valid target value"));
+        }
+    }
+    Ok(())
+}
+
 /// Applies the needed changes of a plan. Returns the backup file, or `None`
 /// when every setting already matched and nothing was touched.
 pub fn apply(
@@ -64,24 +82,11 @@ pub fn apply(
     timestamp: &str,
     plan: &[PlannedChange],
 ) -> Result<Option<PathBuf>, ApplyError> {
+    check(plan).map_err(ApplyError::Refused)?;
+
     let changes: Vec<&PlannedChange> = plan.iter().filter(|change| change.is_needed()).collect();
     if changes.is_empty() {
         return Ok(None);
-    }
-
-    for change in &changes {
-        let id = change.target.setting.id;
-        if !change.target.setting.is_writable() {
-            return Err(ApplyError::Refused(format!("{id} is read-only")));
-        }
-        if let State::Unavailable(reason) = &change.current {
-            return Err(ApplyError::Refused(format!(
-                "{id} cannot be backed up because it cannot be read ({reason})"
-            )));
-        }
-        if matches!(change.target.desired, State::Unavailable(_)) {
-            return Err(ApplyError::Refused(format!("{id} has no valid target value")));
-        }
     }
 
     let backup = Backup {

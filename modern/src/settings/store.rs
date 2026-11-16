@@ -4,8 +4,8 @@
 use windows::Win32::System::Registry::{HKEY, HKEY_LOCAL_MACHINE};
 
 use super::catalog::{ADAPTER_GUID, Setting, Source};
-use super::reader::{self, State, Value};
-use super::{registry, wmi};
+use super::reader::{State, Value};
+use super::{registry, service, wmi};
 
 pub trait Store {
     fn read(&self, setting: &Setting, adapter: Option<&str>) -> State;
@@ -86,7 +86,7 @@ impl Store for SystemStore {
                 registry::read_string(self.hive, &self.key(key, adapter), value)
                     .map(|found| found.map(Value::Text)),
             ),
-            Source::Service { name } => reader::read_service(name),
+            Source::Service { name } => service::read(name),
             Source::Wmi { class, filter, property } => {
                 match wmi::query_u32(class, filter, property) {
                     Ok(Some(number)) => State::Value(Value::Dword(number)),
@@ -109,9 +109,10 @@ impl Store for SystemStore {
                 Source::RegDword { key, value } | Source::RegString { key, value },
                 State::NotSet,
             ) => registry::delete_value(self.hive, &self.key(key, adapter), value),
-            (Source::Service { .. } | Source::Wmi { .. }, _) => {
-                return Err("this setting is read-only".to_string());
+            (Source::Service { name }, State::Value(Value::Service { state, start_type })) => {
+                return service::write(name, *start_type, *state);
             }
+            (Source::Wmi { .. }, _) => return Err("this setting is read-only".to_string()),
             _ => return Err("value type does not match the setting".to_string()),
         };
 

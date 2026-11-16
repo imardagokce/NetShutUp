@@ -52,7 +52,7 @@ const SYSTEM_PROFILE: &str =
 impl Setting {
     /// Whether the program can change this setting, not just display it.
     pub fn is_writable(&self) -> bool {
-        matches!(self.source, Source::RegDword { .. } | Source::RegString { .. })
+        !matches!(self.source, Source::Wmi { .. })
     }
 }
 
