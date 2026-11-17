@@ -3,6 +3,8 @@
 //! and put the original DNS back if nothing works. The logic only talks to a
 //! `Store` and a `Resolver`, so it is tested with fakes.
 
+pub mod resolver;
+
 use std::time::Duration;
 
 use crate::settings::catalog::{self, Setting};
