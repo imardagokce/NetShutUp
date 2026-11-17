@@ -12,6 +12,7 @@ The Modern product line: a single-`.exe` Rust application for Windows 10/11. The
 - Previews what a profile would change, without changing anything.
 - Applies a profile after an explicit confirmation, saving a backup first.
 - Reverts the most recent apply from that backup.
+- Points every Ethernet and Wi-Fi adapter at a DNS provider (Quad9, Cloudflare or Google, depending on the profile) with encrypted DNS (DoH) required, checks with real lookups that it works, tries the next provider if not, and puts your old DNS back if nothing works. Needs Windows 11.
 
 ## Usage
 
@@ -38,6 +39,7 @@ Without arguments in a non-interactive context (a script, a redirect) the progra
 - A setting that was not set before is removed again on revert, not written as zero.
 - Per-adapter settings only go to physical Ethernet and Wi-Fi adapters. Virtual adapters (Wi-Fi Direct, WAN miniports, tunnels) are left alone.
 - TCP global settings (auto-tuning, ECN, RSS) are shown but never changed.
+- DNS is only changed when the internet works beforehand, and is put back exactly as it was (DHCP stays DHCP) if encrypted DNS does not work on your network. IPv6 DNS servers are not touched.
 
 ## Build and test
 
@@ -55,7 +57,7 @@ The C runtime is linked statically, so the release `.exe` runs without extra DLL
 
 Planned for `0.1.0-alpha.1`, see [`docs/design/2026-11-16-alpha-release.md`](../docs/design/2026-11-16-alpha-release.md):
 
-- DNS provider and encrypted DNS (DoH), with automatic fallback
+- DNS over TLS (DoT) as a second encrypted DNS method, tried when DoH does not work
 - Windows Firewall baseline
 
 Later: per-setting control (Advanced Mode) and a GUI.

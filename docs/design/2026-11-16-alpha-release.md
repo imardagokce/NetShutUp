@@ -277,7 +277,9 @@ Her aşama kendi başına çalışır, test edilir ve commit edilir:
 4. Terminal menüsü — kod ve akış testleri tamam (`menu.rs` sahte arayüzle test
    edilir); `inquire` çizimi ve UAC devri henüz gerçek bir terminalde elle
    denenmedi
-5. DNS sağlayıcısı + DoH + bağlantı denemesi ve otomatik geri dönüş
+5. DNS sağlayıcısı + DoH + bağlantı denemesi ve otomatik geri dönüş —
+   5a (DoH) kodu tamam, gerçek makinede yazma testi bekliyor
+   (`2026-11-17-dns-doh-5a.md`); 5b (DoT) sırada
 6. Güvenlik duvarı (temel kademe tüm profiller, sıkı kademe Privacy)
 7. Sürüm numarası, README'de kullanım ve "alpha" uyarısı, GitHub ön-sürüm
 
