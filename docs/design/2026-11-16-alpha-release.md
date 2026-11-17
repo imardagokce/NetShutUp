@@ -1,6 +1,6 @@
 # Alpha Sürümü — Yedekleme, Profiller ve Terminal Arayüzü
 
-Durum: **uygulanıyor — aşama 3 kodu tamam, gerçek makine testi bekliyor** · 2026-11-17 · Hedef sürüm: `0.1.0-alpha.1`
+Durum: **uygulanıyor — aşama 4 kodu tamam; menü ve UAC devri gerçek terminalde elle denenecek** · 2026-11-17 · Hedef sürüm: `0.1.0-alpha.1`
 
 Onay durumu: terminal arayüzü (yol 2), profil tablosu ve güvenlik duvarı
 kapsamı Arda tarafından onaylandı. Güvenlik duvarı Arda'nın kararıyla tüm
@@ -272,7 +272,9 @@ Her aşama kendi başına çalışır, test edilir ve commit edilir:
 3. Yönetici yükseltme + servis yazma desteği + uygulama/geri alma akışı
    — kod tamam (`apply`, `apply --dry-run`, `revert`); gerçek bir makinede
    apply → revert doğrulaması bekliyor
-4. Terminal menüsü
+4. Terminal menüsü — kod ve akış testleri tamam (`menu.rs` sahte arayüzle test
+   edilir); `inquire` çizimi ve UAC devri henüz gerçek bir terminalde elle
+   denenmedi
 5. DNS sağlayıcısı + DoH + bağlantı denemesi ve otomatik geri dönüş
 6. Güvenlik duvarı (temel kademe tüm profiller, sıkı kademe Privacy)
 7. Sürüm numarası, README'de kullanım ve "alpha" uyarısı, GitHub ön-sürüm

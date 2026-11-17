@@ -6,6 +6,7 @@ The Modern product line: a single-`.exe` Rust application for Windows 10/11. The
 
 ## What it does today
 
+- Opens an arrow-key menu when run without arguments (double-click the `.exe`): scan, apply a profile, revert, exit.
 - Reads the real Windows version and lists network adapters.
 - Shows the current value of every setting it knows about and whether it differs from the Windows default. No administrator rights needed.
 - Previews what a profile would change, without changing anything.
@@ -15,7 +16,8 @@ The Modern product line: a single-`.exe` Rust application for Windows 10/11. The
 ## Usage
 
 ```
-netshutup-modern                    Show the current network settings
+netshutup-modern                    Open the menu
+netshutup-modern scan               Show the current network settings
 netshutup-modern preview <profile>  Show what a profile would change
 netshutup-modern apply <profile>    Apply a profile (asks first, saves a backup)
 netshutup-modern apply <profile> --dry-run
@@ -25,7 +27,9 @@ netshutup-modern revert             Undo the most recent apply
 
 Profiles: `privacy`, `performance`, `recommended`.
 
-`apply` and `revert` need administrator rights; the program asks for them through UAC only when one of those commands is run.
+`apply` and `revert` need administrator rights; the program asks for them through UAC only when one of those commands is run. From the menu, UAC is asked once and the menu continues in the administrator window.
+
+Without arguments in a non-interactive context (a script, a redirect) the program prints the usage text instead of opening the menu.
 
 ## Safety
 
@@ -51,7 +55,6 @@ The C runtime is linked statically, so the release `.exe` runs without extra DLL
 
 Planned for `0.1.0-alpha.1`, see [`docs/design/2026-11-16-alpha-release.md`](../docs/design/2026-11-16-alpha-release.md):
 
-- Interactive terminal menu
 - DNS provider and encrypted DNS (DoH), with automatic fallback
 - Windows Firewall baseline
 
