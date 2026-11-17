@@ -1,8 +1,15 @@
 version: 2
 updates:
-  # NetShutUp runs with administrator rights, so dependency updates matter.
+  # NetShutUp runs with administrator rights, so vulnerable dependencies matter.
+  #
+  # Routine version-update pull requests are switched off (limit 0): each one
+  # would open a branch in this repository. Dependabot alerts and security
+  # updates are controlled in the repository's Security settings and are not
+  # affected; a branch only appears when a dependency has a known vulnerability.
+  # To check for new versions by hand: `cargo update --dry-run` in modern/.
   - package-ecosystem: "cargo"
     directory: "/modern"
+    open-pull-requests-limit: 0
     schedule:
       interval: "weekly"
     commit-message:
