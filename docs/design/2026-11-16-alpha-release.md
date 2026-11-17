@@ -39,7 +39,10 @@ her şey GUI geldiğinde aynen kullanılır; yalnızca terminal ekranı değişi
 - Geri alındığında sistemin öncekinden farklı kalması ("ayarlanmamış" bir
   değer geri alınınca yine ayarlanmamış olmalı, sıfır yazılmış değil).
 - Bir profil uygulandıktan sonra internetin çalışmaz halde bırakılması.
-- Privacy profilinde, kullanıcıya sormadan şifresiz DNS'e düşülmesi.
+- ~~Privacy profilinde, kullanıcıya sormadan şifresiz DNS'e düşülmesi.~~
+  Arda 2026-11-17'de kaldırdı: şifreli DNS çalışmazsa tüm profillerde
+  (Privacy dahil) sormadan eski DNS'e dönülür ve kullanıcıya bilgi verilir
+  (`2026-11-17-dns-doh-5a.md`).
 - Geliştirme sırasında Arda'nın kendi ayarlarının değişmesi.
 
 ## Değerlendirilen yollar
@@ -170,16 +173,15 @@ değere çekilmişse kullanıcıyı uyarır. Alpha'da bunu otomatik düzeltmez;
   Başarısızsa sırayla: (1) aynı profilin izin verdiği başka bir sağlayıcıyı
   DoH ile dener, (2) hiçbiri çalışmazsa DNS ayarını yedekten geri alır ve
   kullanıcıya bildirir. İnternet çalışmaz halde bırakılmaz.
-- **DoT'a geçiş alpha'da yok** (Claude'un önerisi, gerekçesi aşağıda).
-- **Windows 10:** DoH'un kararlı sürümlerde desteklenip desteklenmediği
-  kodlamadan önce doğrulanacak. Desteklenmiyorsa program DNS sağlayıcısını
-  yine ayarlar, şifrelemenin bu Windows sürümünde olmadığını açıkça söyler.
+- **DoT (güncellendi, 2026-11-17):** Windows 11'de `netsh dns add encryption
+  ... dothost=` ile DoT var (bu makinede doğrulandı). Arda'nın kararı: DoH
+  çalışmazsa DoT denenir, o da olmazsa eski DNS. DoT **aşama 5b**'de gelir;
+  5a yalnızca DoH'tur.
+- **Windows 10:** kararlı DoH yok; DNS adımı atlanır, şifresiz sağlayıcı
+  ayarlanmaz (`2026-11-17-dns-doh-5a.md`).
 
-DoT gerekçesi: DoH, normal web trafiğiyle aynı kapıyı (443) kullanır; DoT ise
-kendine ait bir kapıyı (853) kullanır ve güvenlik duvarları onu çok daha sık
-engeller. DoH'un çalışmadığı bir ağda DoT'un çalışması beklenmez. Ayrıca
-Windows'ta DoT desteği DoH'tan daha yeni ve daha az yaygın. Bu yüzden
-"DoH olmadı → başka sağlayıcıyla DoH → eski haline dön" sırası daha güvenli.
+Not: DoT, DoH'a göre daha sık engellenir (853 portu, DoH 443'ü kullanır), bu
+yüzden zincirde DoH'tan sonra gelir. Ayrıntı ve akış: `2026-11-17-dns-doh-5a.md`.
 
 ### Güvenlik duvarı (tüm profiller, iki kademe)
 
