@@ -12,7 +12,27 @@ pub enum Value {
     Dword(u32),
     Text(String),
     Service { state: u32, start_type: u32 },
+    /// The IPv4 DNS servers of an adapter, each with its encrypted-DNS (DoH)
+    /// settings if it has any. Never empty: "no servers" is `State::NotSet`.
+    Dns(Vec<DnsServer>),
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DnsServer {
+    pub address: String,
+    pub doh: Option<Doh>,
+}
+
+/// A server's DoH settings as Windows stores them. `flags` is kept as the raw
+/// number so unknown bits survive a backup and restore unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Doh {
+    pub template: String,
+    pub flags: u64,
+}
+
+/// `DNS_DOH_SERVER_SETTINGS_ENABLE`: queries to the server must use DoH.
+pub const DOH_ENABLED: u64 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +85,7 @@ pub fn matches(desired: &State, actual: &State) -> bool {
             State::Value(Value::Service { start_type: want, .. }),
             State::Value(Value::Service { start_type: have, .. }),
         ) => want == have,
+        (State::Value(Value::Dns(want)), State::Value(Value::Dns(have))) => want == have,
         _ => false,
     }
 }
@@ -89,7 +110,22 @@ pub fn format(setting: &Setting, state: &State) -> String {
             service::state_name(*state),
             service::start_type_name(*start_type)
         ),
+        State::Value(Value::Dns(servers)) => format_dns(servers),
     }
+}
+
+fn format_dns(servers: &[DnsServer]) -> String {
+    let addresses: Vec<&str> = servers.iter().map(|server| server.address.as_str()).collect();
+    let encrypted = servers
+        .iter()
+        .filter(|server| server.doh.as_ref().is_some_and(|doh| doh.flags & DOH_ENABLED != 0))
+        .count();
+    let encryption = match encrypted {
+        0 => "not encrypted",
+        n if n == servers.len() => "DoH",
+        _ => "partly encrypted",
+    };
+    format!("{} ({encryption})", addresses.join(", "))
 }
 
 /// Renders a state that a profile asks for. A service is shown by start type
@@ -169,5 +205,49 @@ mod tests {
         assert_eq!(normalize_list("9.9.9.9,149.112.112.112"), "9.9.9.9, 149.112.112.112");
         assert_eq!(normalize_list("1.1.1.1 1.0.0.1"), "1.1.1.1, 1.0.0.1");
         assert_eq!(normalize_list(""), "");
+    }
+
+    const CLOUDFLARE_TEMPLATE: &str = "https://cloudflare-dns.com/dns-query";
+
+    fn server(address: &str, doh: Option<u64>) -> DnsServer {
+        DnsServer {
+            address: address.to_string(),
+            doh: doh.map(|flags| Doh { template: CLOUDFLARE_TEMPLATE.to_string(), flags }),
+        }
+    }
+
+    fn cloudflare(flags: u64) -> State {
+        State::Value(Value::Dns(vec![
+            server("1.1.1.1", Some(flags)),
+            server("1.0.0.1", Some(flags)),
+        ]))
+    }
+
+    #[test]
+    fn dns_states_match_only_when_servers_templates_and_flags_all_equal() {
+        assert!(matches(&cloudflare(2), &cloudflare(2)));
+        assert!(!matches(&cloudflare(2), &cloudflare(6)));
+        assert!(!matches(&cloudflare(2), &State::NotSet));
+        assert!(!matches(&State::NotSet, &cloudflare(2)));
+        let other_server = State::Value(Value::Dns(vec![server("8.8.8.8", Some(2))]));
+        assert!(!matches(&cloudflare(2), &other_server));
+    }
+
+    #[test]
+    fn dns_format_shows_servers_and_encryption() {
+        let dns = setting("dns.static_servers");
+        assert_eq!(format(dns, &cloudflare(2)), "1.1.1.1, 1.0.0.1 (DoH)");
+        let plain = State::Value(Value::Dns(vec![server("8.8.8.8", None)]));
+        assert_eq!(format(dns, &plain), "8.8.8.8 (not encrypted)");
+        let mixed = State::Value(Value::Dns(vec![server("1.1.1.1", Some(2)), server("8.8.8.8", None)]));
+        assert_eq!(format(dns, &mixed), "1.1.1.1, 8.8.8.8 (partly encrypted)");
+    }
+
+    #[test]
+    fn dns_value_survives_a_json_round_trip_including_unknown_flags() {
+        let state = cloudflare(5);
+        let json = serde_json::to_string(&state).unwrap();
+        assert_eq!(serde_json::from_str::<State>(&json).unwrap(), state);
+        assert!(json.contains("\"flags\":5"), "{json}");
     }
 }
