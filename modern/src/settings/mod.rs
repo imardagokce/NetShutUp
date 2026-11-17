@@ -2,6 +2,7 @@ pub mod apply;
 pub mod backup;
 pub mod catalog;
 pub mod interface_dns;
+pub mod plan;
 pub mod profile;
 pub mod provider;
 pub mod reader;

@@ -7,15 +7,16 @@ use std::process::ExitCode;
 
 use crate::adapters::{self, NetworkAdapter};
 use crate::dns::resolver::SystemResolver;
-use crate::dns::{self, Outcome, Precheck};
+use crate::dns::{self, Outcome};
 use crate::elevation::{self, Relaunch, Start};
 use crate::menu::{self, Actions, ProfileChoice, Resume};
 use crate::settings::apply::{self, ApplyError, PlannedChange};
 use crate::settings::backup::{self, Backup};
 use crate::settings::catalog::{self, CATALOG, Scope};
+use crate::settings::plan::{self, DNS_SETTING, dns_trial_scope, is_dns, plan_for_precheck};
 use crate::settings::profile::{self, Choose, DnsSpec, Profile};
 use crate::settings::provider;
-use crate::settings::reader::{self, Origin, State};
+use crate::settings::reader::{self, Origin};
 use crate::settings::store::{Store, SystemStore};
 use crate::terminal::{self, Terminal};
 use crate::{style, version};
@@ -554,11 +555,8 @@ fn profile_adapters() -> Vec<NetworkAdapter> {
 
 fn plan_profile(profile: &Profile, adapters: &[NetworkAdapter]) -> Vec<PlannedChange> {
     let guids: Vec<String> = adapters.iter().map(|adapter| adapter.guid.clone()).collect();
-    let mut targets = profile.targets(&guids);
-    if dns_available() {
-        targets.extend(profile.dns_targets(&guids));
-    }
-    let (plan, unreadable) = drop_unreadable_dns(apply::plan(&SystemStore::system(), targets));
+    let (plan, unreadable) =
+        plan::plan_profile(&SystemStore::system(), profile, &guids, dns_available());
     for guid in unreadable {
         let name = adapters
             .iter()
@@ -569,48 +567,10 @@ fn plan_profile(profile: &Profile, adapters: &[NetworkAdapter]) -> Vec<PlannedCh
     plan
 }
 
-/// An adapter whose DNS cannot be read cannot be backed up. Leave only its DNS
-/// out, so the rest of the profile still applies. Returns the adapters dropped.
-fn drop_unreadable_dns(plan: Vec<PlannedChange>) -> (Vec<PlannedChange>, Vec<String>) {
-    let mut dropped = Vec::new();
-    let kept = plan
-        .into_iter()
-        .filter(|change| {
-            let unreadable = is_dns(change) && matches!(change.current, State::Unavailable(_));
-            if unreadable {
-                dropped.extend(change.target.adapter.clone());
-            }
-            !unreadable
-        })
-        .collect();
-    (kept, dropped)
-}
-
-/// The adapters the DNS trial may switch, with what each had before. Only the
-/// ones the apply engine backs up: anything else could not be put back by `revert`.
-fn dns_trial_scope(plan: &[PlannedChange]) -> (Vec<String>, Vec<(String, State)>) {
-    let scope = plan.iter().filter(|change| is_dns(change) && change.is_needed());
-    let mut adapters = Vec::new();
-    let mut originals = Vec::new();
-    for change in scope {
-        if let Some(adapter) = change.target.adapter.clone() {
-            adapters.push(adapter.clone());
-            originals.push((adapter, change.current.clone()));
-        }
-    }
-    (adapters, originals)
-}
-
 /// Encrypted DNS needs Windows 11; on older builds the DNS stage is left out
 /// of the plan altogether (the rest of the profile is unaffected).
 fn dns_available() -> bool {
     version::get_windows_version().2 >= dns::FIRST_BUILD_WITH_DOH
-}
-
-const DNS_SETTING: &str = "dns.resolver";
-
-fn is_dns(change: &PlannedChange) -> bool {
-    change.target.setting.id == DNS_SETTING
 }
 
 /// What the After column says for the DNS rows: the provider is only
@@ -627,14 +587,6 @@ fn dns_after_text(spec: &DnsSpec) -> String {
             format!("fastest of {} (DoH)", names.join(", "))
         }
     }
-}
-
-/// The plan without its DNS changes unless the precheck allows them.
-fn plan_for_precheck(plan: &[PlannedChange], precheck: &Precheck) -> Vec<PlannedChange> {
-    plan.iter()
-        .filter(|change| *precheck == Precheck::Go || !is_dns(change))
-        .cloned()
-        .collect()
 }
 
 /// How many settings ended up changed: DNS changes that were put back do not count.
@@ -789,8 +741,6 @@ fn or_dash(value: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::apply::Target;
-    use crate::settings::reader::Value;
 
     #[test]
     fn nothing_to_write_is_reported_without_asking_for_admin() {
@@ -800,17 +750,6 @@ mod tests {
 
     fn dns_spec(providers: &[&str], choose: Choose) -> DnsSpec {
         DnsSpec { providers: providers.iter().map(|id| id.to_string()).collect(), choose }
-    }
-
-    fn planned(id: &str, adapter: Option<&str>, desired: State) -> PlannedChange {
-        PlannedChange {
-            target: Target {
-                setting: catalog::find(id).unwrap(),
-                adapter: adapter.map(str::to_string),
-                desired,
-            },
-            current: State::NotSet,
-        }
     }
 
     #[test]
@@ -823,54 +762,6 @@ mod tests {
     fn dns_after_text_for_fastest_names_the_candidates() {
         let spec = dns_spec(&["cloudflare", "google"], Choose::Fastest);
         assert_eq!(dns_after_text(&spec), "fastest of Cloudflare, Google (DoH)");
-    }
-
-    #[test]
-    fn dns_targets_are_dropped_unless_precheck_says_go() {
-        let google = provider::find("google").unwrap().state();
-        let plan = vec![
-            planned("dns.llmnr", None, State::Value(Value::Dword(0))),
-            planned("dns.resolver", Some("{A}"), google),
-        ];
-        let ids = |plan: &[PlannedChange]| -> Vec<&'static str> {
-            plan.iter().map(|change| change.target.setting.id).collect()
-        };
-
-        assert_eq!(ids(&plan_for_precheck(&plan, &Precheck::Go)), ["dns.llmnr", "dns.resolver"]);
-        assert_eq!(ids(&plan_for_precheck(&plan, &Precheck::NoInternet)), ["dns.llmnr"]);
-        assert_eq!(ids(&plan_for_precheck(&plan, &Precheck::Unsupported)), ["dns.llmnr"]);
-    }
-
-    #[test]
-    fn unreadable_dns_is_dropped_so_the_rest_of_the_profile_still_applies() {
-        let google = provider::find("google").unwrap().state();
-        let readable = planned("dns.resolver", Some("{A}"), google.clone());
-        let mut unreadable = planned("dns.resolver", Some("{B}"), google);
-        unreadable.current = State::Unavailable("DNS settings error 87".to_string());
-        let other = planned("dns.llmnr", None, State::Value(Value::Dword(0)));
-
-        let (plan, dropped) = drop_unreadable_dns(vec![readable, unreadable, other]);
-
-        let kept: Vec<(&str, Option<&str>)> = plan
-            .iter()
-            .map(|change| (change.target.setting.id, change.target.adapter.as_deref()))
-            .collect();
-        assert_eq!(kept, [("dns.resolver", Some("{A}")), ("dns.llmnr", None)]);
-        assert_eq!(dropped, ["{B}"]);
-    }
-
-    #[test]
-    fn dns_trial_scope_covers_only_backed_up_adapters() {
-        let google = provider::find("google").unwrap().state();
-        // {A} already has Google, so the engine will not back it up or write it.
-        let mut already = planned("dns.resolver", Some("{A}"), google.clone());
-        already.current = google.clone();
-        let needed = planned("dns.resolver", Some("{B}"), google);
-
-        let (adapters, originals) = dns_trial_scope(&[already, needed]);
-
-        assert_eq!(adapters, ["{B}"]);
-        assert_eq!(originals, [("{B}".to_string(), State::NotSet)]);
     }
 
     #[test]

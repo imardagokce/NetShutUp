@@ -46,11 +46,16 @@ pub enum Precheck {
 pub fn precheck(resolver: &dyn Resolver, windows_build: u32) -> Precheck {
     if windows_build < FIRST_BUILD_WITH_DOH {
         Precheck::Unsupported
-    } else if TEST_NAMES.iter().any(|name| resolver.lookup(name).is_ok()) {
+    } else if internet_works(resolver) {
         Precheck::Go
     } else {
         Precheck::NoInternet
     }
+}
+
+/// Whether DNS resolves at all right now: one of the test names is enough.
+pub fn internet_works(resolver: &dyn Resolver) -> bool {
+    TEST_NAMES.iter().any(|name| resolver.lookup(name).is_ok())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -126,7 +131,7 @@ pub fn run(
     let tried = providers.iter().map(|provider| provider.name.to_string()).collect();
     match restore(store, resolver, setting, originals) {
         Ok(()) => {
-            let internet_ok = TEST_NAMES.iter().any(|name| resolver.lookup(name).is_ok());
+            let internet_ok = internet_works(resolver);
             Outcome::FellBack { tried, internet_ok }
         }
         Err(reason) => Outcome::ProgramError(reason),
