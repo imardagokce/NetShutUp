@@ -3,6 +3,7 @@ mod commands;
 mod dns;
 mod elevation;
 mod menu;
+mod selftest;
 mod settings;
 mod style;
 mod terminal;
