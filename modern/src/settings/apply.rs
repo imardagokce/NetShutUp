@@ -179,69 +179,11 @@ mod tests {
     use crate::settings::reader::{DnsServer, Doh, Value};
     use crate::settings::registry::{self, sandbox};
     use crate::settings::store::SystemStore;
-    use std::cell::{Cell, RefCell};
-    use std::collections::HashMap;
+    use crate::settings::store::testing::FakeStore;
+    use std::cell::Cell;
     use windows::Win32::System::Registry::HKEY_CURRENT_USER as HKCU;
 
     const ADAPTER: &str = "{TEST-ADAPTER}";
-
-    type Key = (String, Option<String>);
-
-    /// In-memory store with injectable write failures.
-    #[derive(Default)]
-    struct FakeStore {
-        values: RefCell<HashMap<Key, State>>,
-        /// Fail this many upcoming writes to `fail_id`.
-        fail_id: Option<&'static str>,
-        failures_left: Cell<u32>,
-        unreadable_id: Option<&'static str>,
-        writes: Cell<u32>,
-    }
-
-    impl FakeStore {
-        fn key(setting: &Setting, adapter: Option<&str>) -> Key {
-            (setting.id.to_string(), adapter.map(str::to_string))
-        }
-
-        fn seed(&self, id: &str, adapter: Option<&str>, state: State) {
-            self.values
-                .borrow_mut()
-                .insert((id.to_string(), adapter.map(str::to_string)), state);
-        }
-
-        fn snapshot(&self) -> HashMap<Key, State> {
-            self.values.borrow().clone()
-        }
-    }
-
-    impl Store for FakeStore {
-        fn read(&self, setting: &Setting, adapter: Option<&str>) -> State {
-            if self.unreadable_id == Some(setting.id) {
-                return State::Unavailable("simulated".to_string());
-            }
-            let key = Self::key(setting, adapter);
-            self.values.borrow().get(&key).cloned().unwrap_or(State::NotSet)
-        }
-
-        fn write(
-            &self,
-            setting: &Setting,
-            adapter: Option<&str>,
-            state: &State,
-        ) -> Result<(), String> {
-            if self.fail_id == Some(setting.id) && self.failures_left.get() > 0 {
-                self.failures_left.set(self.failures_left.get() - 1);
-                return Err("simulated failure".to_string());
-            }
-            self.writes.set(self.writes.get() + 1);
-            let key = Self::key(setting, adapter);
-            match state {
-                State::NotSet => self.values.borrow_mut().remove(&key),
-                state => self.values.borrow_mut().insert(key, state.clone()),
-            };
-            Ok(())
-        }
-    }
 
     fn dword(number: u32) -> State {
         State::Value(Value::Dword(number))

@@ -1,5 +1,6 @@
 mod adapters;
 mod commands;
+mod dns;
 mod elevation;
 mod menu;
 mod settings;
