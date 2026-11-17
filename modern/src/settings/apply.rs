@@ -174,7 +174,7 @@ fn restore(store: &dyn Store, entries: &[Entry]) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::settings::backup::testing::temp_dir;
-    use crate::settings::reader::Value;
+    use crate::settings::reader::{DnsServer, Doh, Value};
     use crate::settings::registry::{self, sandbox};
     use crate::settings::store::SystemStore;
     use std::cell::{Cell, RefCell};
@@ -290,6 +290,49 @@ mod tests {
         // "Not set" is restored as not set, and an empty string as an empty
         // string: the store is identical to how it started.
         assert_eq!(store.snapshot(), before);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn cloudflare_dns() -> State {
+        let doh = |flags| Doh { template: "https://cloudflare-dns.com/dns-query".into(), flags };
+        State::Value(Value::Dns(vec![
+            DnsServer { address: "1.1.1.1".into(), doh: Some(doh(2)) },
+            DnsServer { address: "1.0.0.1".into(), doh: Some(doh(2)) },
+        ]))
+    }
+
+    #[test]
+    fn apply_then_revert_restores_dns_exactly() {
+        let dir = temp_dir("apply-revert-dns");
+        let store = FakeStore::default();
+        // Adapter A uses DHCP (not set); adapter B has a static server with
+        // DoH flags this program does not know (5): both must come back exactly.
+        let other = "{OTHER-ADAPTER}";
+        let static_dns = State::Value(Value::Dns(vec![DnsServer {
+            address: "9.9.9.9".into(),
+            doh: Some(Doh { template: "https://dns.quad9.net/dns-query".into(), flags: 5 }),
+        }]));
+        store.seed("dns.resolver", Some(other), static_dns.clone());
+        let before = store.snapshot();
+
+        let targets = vec![
+            target("dns.resolver", Some(ADAPTER), cloudflare_dns()),
+            target("dns.resolver", Some(other), cloudflare_dns()),
+        ];
+        let plan = plan(&store, targets);
+        let path = apply(&store, &dir, "test", "20261117-120000", &plan).unwrap().unwrap();
+
+        let dns = catalog::find("dns.resolver").unwrap();
+        assert_eq!(store.read(dns, Some(ADAPTER)), cloudflare_dns());
+        assert_eq!(store.read(dns, Some(other)), cloudflare_dns());
+
+        let saved = backup::load(&path).unwrap();
+        assert_eq!(saved.entries[0].previous, State::NotSet);
+        assert_eq!(saved.entries[1].previous, static_dns);
+
+        assert_eq!(revert(&store, &saved), Vec::<String>::new());
+        assert_eq!(store.snapshot(), before);
+        assert_eq!(store.read(dns, Some(ADAPTER)), State::NotSet);
         let _ = fs::remove_dir_all(&dir);
     }
 

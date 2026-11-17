@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn dns_format_shows_servers_and_encryption() {
-        let dns = setting("dns.static_servers");
+        let dns = setting("dns.resolver");
         assert_eq!(format(dns, &cloudflare(2)), "1.1.1.1, 1.0.0.1 (DoH)");
         let plain = State::Value(Value::Dns(vec![server("8.8.8.8", None)]));
         assert_eq!(format(dns, &plain), "8.8.8.8 (not encrypted)");

@@ -5,7 +5,7 @@ use windows::Win32::System::Registry::{HKEY, HKEY_LOCAL_MACHINE};
 
 use super::catalog::{ADAPTER_GUID, Setting, Source};
 use super::reader::{State, Value};
-use super::{registry, service, wmi};
+use super::{interface_dns, registry, service, wmi};
 
 pub trait Store {
     fn read(&self, setting: &Setting, adapter: Option<&str>) -> State;
@@ -53,7 +53,7 @@ impl SystemStore {
             Source::RegDword { key, .. } | Source::RegString { key, .. } => {
                 Some(self.key(key, adapter))
             }
-            Source::Service { .. } | Source::Wmi { .. } => None,
+            Source::Service { .. } | Source::Wmi { .. } | Source::InterfaceDns => None,
         }
     }
 }
@@ -87,6 +87,8 @@ impl Store for SystemStore {
                     .map(|found| found.map(Value::Text)),
             ),
             Source::Service { name } => service::read(name),
+            Source::InterfaceDns => interface_dns::read(adapter.unwrap_or_default())
+                .unwrap_or_else(State::Unavailable),
             Source::Wmi { class, filter, property } => {
                 match wmi::query_u32(class, filter, property) {
                     Ok(Some(number)) => State::Value(Value::Dword(number)),
@@ -111,6 +113,9 @@ impl Store for SystemStore {
             ) => registry::delete_value(self.hive, &self.key(key, adapter), value),
             (Source::Service { name }, State::Value(Value::Service { state, start_type })) => {
                 return service::write(name, *start_type, *state);
+            }
+            (Source::InterfaceDns, state) => {
+                return interface_dns::write(adapter.unwrap_or_default(), state);
             }
             (Source::Wmi { .. }, _) => return Err("this setting is read-only".to_string()),
             _ => return Err("value type does not match the setting".to_string()),

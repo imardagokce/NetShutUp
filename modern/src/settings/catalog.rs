@@ -16,6 +16,9 @@ pub enum Source {
     RegDword { key: &'static str, value: &'static str },
     RegString { key: &'static str, value: &'static str },
     Service { name: &'static str },
+    /// The adapter's IPv4 DNS servers and DoH settings, read and written
+    /// through the Windows IP Helper API (see `interface_dns`).
+    InterfaceDns,
     /// Integer property of a WMI object in `ROOTStandardCimv2`.
     Wmi { class: &'static str, filter: Option<&'static str>, property: &'static str },
 }
@@ -83,6 +86,14 @@ pub static CATALOG: &[Setting] = &[
         name: "Static DNS servers",
         scope: Scope::Adapter,
         source: Source::RegString { key: TCPIP_INTERFACE, value: "NameServer" },
+        default: Some(DefaultValue::Unset),
+        labels: &[],
+    },
+    Setting {
+        id: "dns.resolver",
+        name: "DNS resolver",
+        scope: Scope::Adapter,
+        source: Source::InterfaceDns,
         default: Some(DefaultValue::Unset),
         labels: &[],
     },
@@ -251,7 +262,7 @@ mod tests {
         for setting in CATALOG {
             let key = match setting.source {
                 Source::RegDword { key, .. } | Source::RegString { key, .. } => key,
-                Source::Service { .. } | Source::Wmi { .. } => continue,
+                Source::Service { .. } | Source::Wmi { .. } | Source::InterfaceDns => continue,
             };
             assert_eq!(
                 key.contains(ADAPTER_GUID),
