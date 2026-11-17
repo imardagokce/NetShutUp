@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # NetShutUp runs with administrator rights, so dependency updates matter.
+  - package-ecosystem: "cargo"
+    directory: "/modern"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"

@@ -1,0 +1,60 @@
+name: Test report
+description: Report what happened when you tried NetShutUp on your computer
+labels: ["test-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for testing. NetShutUp is pre-alpha: please start with
+        `scan`, `preview <profile>` and `apply <profile> --dry-run`, which
+        change nothing. Only run a real `apply` if you were asked to.
+        **Security problems:** do not post them here, see SECURITY.md.
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and build
+      description: The first line of `netshutup-modern scan`, or the header of the menu.
+      placeholder: "Windows 11 (build 26200)"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: NetShutUp version or commit
+      placeholder: "0.1.0 / abc1234"
+    validations:
+      required: true
+  - type: dropdown
+    id: command
+    attributes:
+      label: What did you run?
+      options:
+        - Menu (double-click / no arguments)
+        - scan
+        - preview
+        - apply --dry-run
+        - apply (real)
+        - revert
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Worked as expected
+        - Worked, but something looked wrong
+        - Failed or crashed
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Paste the text from the terminal. Remove anything private (IP and MAC addresses).
+      render: text
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Was anything confusing? Did Windows (UAC, firewall, antivirus) interfere?
