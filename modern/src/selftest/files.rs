@@ -159,6 +159,7 @@ mod tests {
             all_restored: true,
             diagnostics: Diagnostics::default(),
             environment: vec![Check::new("admin", "Admin", Status::Pass, "yes", 1)],
+            safety: vec![],
             reading: vec![],
             cycles: vec![],
             closing: vec![],

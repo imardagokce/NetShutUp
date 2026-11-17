@@ -42,6 +42,12 @@ pub trait Env {
     /// The per-adapter encrypted DNS entries Windows holds (masked), to see
     /// whether any are left behind after the run.
     fn doh_entries(&self) -> Vec<String>;
+    /// Starts a system restore point. The text says what happened.
+    fn restore_point(&self) -> Result<String, String>;
+    /// Exports the relevant registry keys to files; returns their names.
+    fn export_registry(&self) -> Result<Vec<String>, String>;
+    /// Closes the restore point `restore_point` started.
+    fn finish_restore_point(&self);
 }
 
 /// The value of every catalog setting: system-wide ones once, per-adapter ones
@@ -129,7 +135,16 @@ fn run_inner(
     let dns_ok = env.windows_build() >= dns::FIRST_BUILD_WITH_DOH;
 
     say("Checking the environment...");
-    let (environment, can_write) = environment_checks(env, &adapters);
+    let (environment, mut can_write) = environment_checks(env, &adapters);
+    let mut safety = Vec::new();
+    let mut restore_began = false;
+    if can_write {
+        say("Saving a copy of the relevant registry keys and a restore point...");
+        let (checks, exported, began) = safety_checks(env);
+        safety = checks;
+        can_write = exported;
+        restore_began = began;
+    }
     let start = snapshot(env.store(), &adapters);
     let doh_before = env.doh_entries();
 
@@ -142,7 +157,7 @@ fn run_inner(
     let mut active: Option<PathBuf> = None;
     for profile in profiles {
         if !can_write {
-            cycles.push(skipped_cycle(profile, "needs administrator rights, an Ethernet or Wi-Fi adapter and a writable backup folder"));
+            cycles.push(skipped_cycle(profile, &skip_reason(&safety)));
             continue;
         }
         if revert_failed {
@@ -211,6 +226,9 @@ fn run_inner(
         (false, Some(path)) => Marker::Active(path),
         (false, None) => Marker::NotRestored,
     });
+    if restore_began {
+        env.finish_restore_point();
+    }
 
     Report {
         schema: Report::SCHEMA,
@@ -220,9 +238,52 @@ fn run_inner(
         all_restored,
         diagnostics,
         environment,
+        safety,
         reading,
         cycles,
         closing,
+    }
+}
+
+/// Phase 0: registry export (must work, or nothing is written) and a restore
+/// point (nice to have). Returns the checks, whether writing may go on, and
+/// whether a restore point was begun (so it has to be finished).
+fn safety_checks(env: &dyn Env) -> (Vec<Check>, bool, bool) {
+    let mut checks = Vec::new();
+
+    let began = Instant::now();
+    let exported = env.export_registry();
+    let (status, detail) = match &exported {
+        Ok(files) => (Status::Pass, format!("{} file(s) saved in the reg-backups folder", files.len())),
+        Err(reason) => (Status::Fail, reason.clone()),
+    };
+    checks.push(check("safety.registry_export", "Registry keys exported to .reg files", status, &detail, began));
+    if exported.is_err() {
+        checks.push(Check::new(
+            "safety.restore_point",
+            "System restore point created",
+            Status::Skip,
+            "not attempted because the registry export failed",
+            0,
+        ));
+        return (checks, false, false);
+    }
+
+    let began = Instant::now();
+    let point = env.restore_point();
+    let (status, detail) = match &point {
+        Ok(text) => (Status::Pass, text.clone()),
+        Err(reason) => (Status::Info, reason.clone()),
+    };
+    checks.push(check("safety.restore_point", "System restore point created", status, &detail, began));
+    (checks, true, point.is_ok())
+}
+
+/// Why the cycles are not run, for the report.
+fn skip_reason(safety: &[Check]) -> String {
+    match safety.iter().find(|c| c.id == "safety.registry_export" && c.status == Status::Fail) {
+        Some(failed) => format!("the registry could not be saved first: {}", failed.detail),
+        None => "needs administrator rights, an Ethernet or Wi-Fi adapter and a writable backup folder".to_string(),
     }
 }
 
@@ -645,6 +706,9 @@ mod tests {
         marker: RefCell<Vec<Marker>>,
         /// What `doh_entries` returns on successive calls (empty when used up).
         doh: RefCell<std::collections::VecDeque<Vec<String>>>,
+        export: Result<Vec<String>, String>,
+        restore: Result<String, String>,
+        finished: Cell<u32>,
     }
 
     impl Env for FakeEnv {
@@ -675,6 +739,15 @@ mod tests {
         fn doh_entries(&self) -> Vec<String> {
             self.doh.borrow_mut().pop_front().unwrap_or_default()
         }
+        fn restore_point(&self) -> Result<String, String> {
+            self.restore.clone()
+        }
+        fn export_registry(&self) -> Result<Vec<String>, String> {
+            self.export.clone()
+        }
+        fn finish_restore_point(&self) {
+            self.finished.set(self.finished.get() + 1);
+        }
     }
 
     fn env_with(name: &str, store: FakeStore, adapters: &[&str]) -> FakeEnv {
@@ -696,6 +769,9 @@ mod tests {
             dir: temp_dir(name),
             marker: RefCell::new(Vec::new()),
             doh: RefCell::new(Default::default()),
+            export: Ok(vec!["Dnscache.reg".to_string(); 7]),
+            restore: Ok("created".to_string()),
+            finished: Cell::new(0),
         }
     }
 
@@ -841,6 +917,68 @@ mod tests {
 
         assert_eq!(env.store.writes.get(), 0);
         assert!(report.cycles.iter().all(|c| c.checks.iter().all(|k| k.status == Status::Skip)));
+    }
+
+    fn safety<'a>(report: &'a Report, id: &str) -> &'a Check {
+        report.safety.iter().find(|c| c.id == id).unwrap_or_else(|| panic!("no check {id}"))
+    }
+
+    #[test]
+    fn safety_checks_pass_when_both_work() {
+        let env = env("selftest-safety-ok");
+
+        let report = run_it(&env);
+
+        assert_eq!(safety(&report, "safety.registry_export").status, Status::Pass);
+        assert!(safety(&report, "safety.registry_export").detail.contains('7'));
+        assert_eq!(safety(&report, "safety.restore_point").status, Status::Pass);
+        assert!(env.store.writes.get() > 0, "cycles ran");
+        assert_eq!(status(cycle(&report, "privacy"), "apply"), Status::Pass);
+    }
+
+    #[test]
+    fn export_failure_blocks_all_writes() {
+        let mut env = env("selftest-safety-export-fail");
+        env.export = Err("reg.exe failed".to_string());
+
+        let report = run_it(&env);
+
+        assert_eq!(env.store.writes.get(), 0);
+        assert_eq!(safety(&report, "safety.registry_export").status, Status::Fail);
+        assert!(safety(&report, "safety.registry_export").detail.contains("reg.exe failed"));
+        assert!(report.cycles.iter().all(|c| c.checks.iter().all(|k| k.status == Status::Skip)));
+        assert!(report.all_restored);
+        assert_eq!(env.finished.get(), 0);
+    }
+
+    #[test]
+    fn restore_point_failure_is_info_and_does_not_block() {
+        let mut env = env("selftest-safety-rp-fail");
+        env.restore = Err("System Protection is off".to_string());
+
+        let report = run_it(&env);
+
+        let point = safety(&report, "safety.restore_point");
+        assert_eq!(point.status, Status::Info);
+        assert!(point.detail.contains("System Protection is off"));
+        assert_eq!(status(cycle(&report, "privacy"), "apply"), Status::Pass);
+        assert_eq!(env.finished.get(), 0);
+    }
+
+    #[test]
+    fn restore_point_is_finished_after_the_run_only_if_it_began() {
+        let env = env("selftest-safety-finish");
+        run_it(&env);
+        assert_eq!(env.finished.get(), 1);
+    }
+
+    #[test]
+    fn nothing_is_exported_when_the_run_cannot_write_anyway() {
+        let mut env = env("selftest-safety-not-admin");
+        env.elevated = false;
+        let report = run_it(&env);
+        assert!(report.safety.is_empty());
+        assert_eq!(env.finished.get(), 0);
     }
 
     fn privacy_writes() -> u32 {

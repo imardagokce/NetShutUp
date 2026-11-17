@@ -32,6 +32,9 @@ pub fn render_markdown(report: &Report) -> String {
 
     out.push_str("## Environment\n\n");
     out.push_str(&checks_table(&report.environment));
+    out.push_str("\n## Safety net\n\n");
+    out.push_str(&checks_table(&report.safety));
+    out.push_str("\nTo go back: use System Restore, or double-click the .reg files in the reg-backups folder (the folder name is shown on screen).\n");
     out.push_str("\n## Diagnostics\n\n");
     out.push_str(&diagnostics_list(&report.diagnostics));
     out.push_str("\n## Reading checks\n\n");
@@ -168,6 +171,7 @@ mod tests {
             all_restored,
             diagnostics: Diagnostics::default(),
             environment: vec![check("admin", Status::Pass, "elevated")],
+            safety: vec![check("safety.registry_export", Status::Pass, "7 file(s)")],
             reading: vec![check("read.dns", Status::Info, "a|b")],
             cycles: vec![Cycle {
                 profile: "privacy".into(),
@@ -196,10 +200,27 @@ mod tests {
     #[test]
     fn render_shows_counts_icons_and_escapes_pipes() {
         let text = render_markdown(&sample(true));
-        assert!(text.contains("✅ 3 ❌ 1 ⏭ 0 ℹ️ 2"), "{text}");
+        assert!(text.contains("✅ 4 ❌ 1 ⏭ 0 ℹ️ 2"), "{text}");
         assert!(text.contains("a\\|b"), "{text}");
         assert!(text.contains("### privacy"), "{text}");
         assert!(text.contains("Everything restored: yes"), "{text}");
+    }
+
+    #[test]
+    fn render_has_a_safety_net_section() {
+        let text = render_markdown(&sample(true));
+        let environment = text.find("## Environment").unwrap();
+        let safety = text.find("## Safety net").expect("safety section");
+        assert!(safety > environment, "{text}");
+        assert!(text.contains("title of safety.registry_export"), "{text}");
+        assert!(text.contains("To go back: use System Restore"), "{text}");
+        assert!(text.contains("reg-backups"), "{text}");
+    }
+
+    #[test]
+    fn report_json_has_a_safety_section() {
+        let json = serde_json::to_value(sample(true)).unwrap();
+        assert_eq!(json["safety"][0]["id"], "safety.registry_export");
     }
 
     #[test]

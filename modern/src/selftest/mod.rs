@@ -9,6 +9,7 @@ pub mod files;
 pub mod mask;
 pub mod render;
 pub mod runner;
+pub mod safety;
 pub mod system_env;
 
 use diagnostics::Diagnostics;
@@ -62,6 +63,7 @@ pub struct Report {
     pub all_restored: bool,
     pub diagnostics: Diagnostics,
     pub environment: Vec<Check>,
+    pub safety: Vec<Check>,
     pub reading: Vec<Check>,
     pub cycles: Vec<Cycle>,
     pub closing: Vec<Check>,
@@ -73,6 +75,7 @@ impl Report {
     fn all_checks(&self) -> impl Iterator<Item = &Check> {
         self.environment
             .iter()
+            .chain(&self.safety)
             .chain(&self.reading)
             .chain(self.cycles.iter().flat_map(|cycle| cycle.checks.iter()))
             .chain(&self.closing)
