@@ -8,6 +8,8 @@ body:
         Thank you for testing. NetShutUp is pre-alpha: please start with
         `scan`, `preview <profile>` and `apply <profile> --dry-run`, which
         change nothing. Only run a real `apply` if you were asked to.
+        The easiest way: run **Self-test (for testers)** from the menu and attach the two
+        report files it writes (`.md` and `.json`) below.
         **Security problems:** do not post them here, see SECURITY.md.
   - type: input
     id: windows
@@ -29,6 +31,7 @@ body:
     attributes:
       label: What did you run?
       options:
+        - Self-test (menu item or the selftest command)
         - Menu (double-click / no arguments)
         - scan
         - preview
