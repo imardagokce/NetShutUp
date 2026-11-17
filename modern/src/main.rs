@@ -1,6 +1,7 @@
 mod adapters;
 mod commands;
 mod elevation;
+mod menu;
 mod settings;
 mod style;
 mod version;
