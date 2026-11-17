@@ -2,7 +2,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use windows::Win32::NetworkManagement::IpHelper::{
     GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
-    GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH,
+    GetAdaptersAddresses, GetIfEntry2, IP_ADAPTER_ADDRESSES_LH, MIB_IF_ROW2,
 };
 use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
 use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6, SOCKADDR, SOCKADDR_IN, SOCKADDR_IN6};
@@ -100,13 +100,32 @@ pub fn get_network_adapters() -> Result<Vec<NetworkAdapter>, u32> {
             adapter_type: adapter_type_name(info.IfType),
             is_up: info.OperStatus == IfOperStatusUp,
             is_loopback: info.IfType == IF_TYPE_LOOPBACK,
-            takes_profile_settings: matches!(info.IfType, IF_TYPE_ETHERNET | IF_TYPE_WIFI),
+            takes_profile_settings: takes_profile_settings(info.IfType, is_hardware_interface(info)),
         });
 
         current = info.Next;
     }
 
     Ok(adapters)
+}
+
+/// Whether a profile's per-adapter settings go to this adapter: only real
+/// Ethernet and Wi-Fi hardware. Windows reports some virtual adapters (Wi-Fi
+/// Direct, WAN miniports, the kernel debugger) with the same interface types.
+fn takes_profile_settings(if_type: u32, is_hardware: bool) -> bool {
+    is_hardware && matches!(if_type, IF_TYPE_ETHERNET | IF_TYPE_WIFI)
+}
+
+/// Asks Windows whether the adapter is backed by real hardware
+/// (`MIB_IF_ROW2.InterfaceAndOperStatusFlags.HardwareInterface`). An adapter
+/// that cannot be queried counts as not hardware, so it is left alone.
+fn is_hardware_interface(info: &IP_ADAPTER_ADDRESSES_LH) -> bool {
+    const HARDWARE_INTERFACE: u8 = 0b1;
+
+    let mut row = MIB_IF_ROW2 { InterfaceLuid: info.Luid, ..Default::default() };
+    let result = unsafe { GetIfEntry2(&mut row) };
+    result.0 == ERROR_SUCCESS
+        && row.InterfaceAndOperStatusFlags._bitfield & HARDWARE_INTERFACE != 0
 }
 
 /// Formats an IPv4 or IPv6 socket address; `None` for null or other families.
@@ -159,5 +178,30 @@ fn adapter_type_name(if_type: u32) -> &'static str {
         131 => "Tunnel",
         243 | 244 => "Mobile Broadband",
         _ => "Other",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hardware_ethernet_and_wifi_take_profile_settings() {
+        assert!(takes_profile_settings(IF_TYPE_ETHERNET, true));
+        assert!(takes_profile_settings(IF_TYPE_WIFI, true));
+    }
+
+    #[test]
+    fn virtual_adapters_are_skipped_even_with_a_wifi_or_ethernet_type() {
+        // Microsoft Wi-Fi Direct Virtual Adapter reports as Wi-Fi; WAN
+        // miniports and the kernel debug adapter report as Ethernet.
+        assert!(!takes_profile_settings(IF_TYPE_WIFI, false));
+        assert!(!takes_profile_settings(IF_TYPE_ETHERNET, false));
+    }
+
+    #[test]
+    fn other_interface_types_are_skipped() {
+        assert!(!takes_profile_settings(IF_TYPE_LOOPBACK, true));
+        assert!(!takes_profile_settings(131, true));
     }
 }
