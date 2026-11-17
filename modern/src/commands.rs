@@ -404,6 +404,8 @@ fn restore_backup(
         // same backup would be offered again.
         eprintln!("Note: the backup could not be marked as used ({reason}).");
     }
+    // A self-test that was cut off is settled once its own backup is restored.
+    files::write_marker(&files::marker_after_revert(&files::read_marker(), backup_file));
     println!("{RESTART_NOTE}");
     ExitCode::SUCCESS
 }
