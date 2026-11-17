@@ -3,6 +3,9 @@
 //! and put the original DNS back if nothing works. The logic only talks to a
 //! `Store` and a `Resolver`, so it is tested with fakes.
 
+// The DoT backend is wired into the trial by plan tasks 3 and 4.
+#[allow(dead_code)]
+pub mod dot;
 pub mod resolver;
 
 use std::time::Duration;

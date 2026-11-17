@@ -7,9 +7,9 @@
 use std::ffi::c_void;
 
 use windows::Win32::System::Registry::{
-    HKEY, KEY_ENUMERATE_SUB_KEYS, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ,
-    REG_VALUE_TYPE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW,
-    RegDeleteKeyValueW, RegDeleteKeyW, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, RegQueryInfoKeyW,
+    HKEY, KEY_ENUMERATE_SUB_KEYS, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_BINARY, REG_DWORD, REG_EXPAND_SZ,
+    REG_MULTI_SZ, REG_OPTION_NON_VOLATILE, REG_QWORD, REG_SZ, REG_VALUE_TYPE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW,
+    RegDeleteKeyValueW, RegDeleteKeyW, RegEnumKeyExW, RegEnumValueW, RegGetValueW, RegOpenKeyExW, RegQueryInfoKeyW,
     RegSetValueExW,
 };
 use windows::core::{HSTRING, PCWSTR, PWSTR};
@@ -165,6 +165,82 @@ pub fn subkeys(hive: HKEY, key: &str) -> RegResult<Vec<String>> {
     }
 }
 
+/// Every value of a key as `(name, "<type>:<data>")`, sorted by name. Binary
+/// data is hex. A key that does not exist has none.
+#[allow(dead_code)] // wired by the DoT chain (plan task 3)
+pub fn values(hive: HKEY, key: &str) -> RegResult<Vec<(String, String)>> {
+    unsafe {
+        let mut handle = HKEY::default();
+        let opened = RegOpenKeyExW(hive, &HSTRING::from(key), None, KEY_QUERY_VALUE, &mut handle);
+        match opened.0 {
+            ERROR_SUCCESS => {}
+            ERROR_FILE_NOT_FOUND => return Ok(Vec::new()),
+            code => return Err(code),
+        }
+
+        let mut found = Vec::new();
+        let mut index = 0u32;
+        let outcome = loop {
+            let mut name = vec![0u16; 16384];
+            let mut name_len = name.len() as u32;
+            let mut data = vec![0u8; 65536];
+            let mut data_len = data.len() as u32;
+            let mut kind = 0u32;
+            let result = RegEnumValueW(
+                handle,
+                index,
+                Some(PWSTR(name.as_mut_ptr())),
+                &mut name_len,
+                None,
+                Some(&mut kind),
+                Some(data.as_mut_ptr()),
+                Some(&mut data_len),
+            );
+            match result.0 {
+                ERROR_SUCCESS => found.push((
+                    String::from_utf16_lossy(&name[..name_len as usize]),
+                    describe_value(kind, &data[..data_len as usize]),
+                )),
+                ERROR_NO_MORE_ITEMS => break Ok(()),
+                code => break Err(code),
+            }
+            index += 1;
+        };
+        let _ = RegCloseKey(handle);
+        outcome?;
+        found.sort();
+        Ok(found)
+    }
+}
+
+fn describe_value(kind: u32, data: &[u8]) -> String {
+    let text = |data: &[u8]| {
+        let units: Vec<u16> = data.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        String::from_utf16_lossy(&units)
+    };
+    match REG_VALUE_TYPE(kind) {
+        REG_SZ => format!("REG_SZ:{}", text(data).trim_end_matches('\0')),
+        REG_EXPAND_SZ => format!("REG_EXPAND_SZ:{}", text(data).trim_end_matches('\0')),
+        REG_MULTI_SZ => {
+            let joined = text(data).trim_end_matches('\0').split('\0').collect::<Vec<_>>().join("|");
+            format!("REG_MULTI_SZ:{joined}")
+        }
+        REG_DWORD if data.len() == 4 => {
+            format!("REG_DWORD:{}", u32::from_le_bytes([data[0], data[1], data[2], data[3]]))
+        }
+        REG_QWORD if data.len() == 8 => {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(data);
+            format!("REG_QWORD:{}", u64::from_le_bytes(bytes))
+        }
+        other => {
+            let name = if other == REG_BINARY { "REG_BINARY" } else { "OTHER" };
+            let hex: String = data.iter().map(|b| format!("{b:02x}")).collect();
+            format!("{name}:{hex}")
+        }
+    }
+}
+
 /// Whether a key exists. A key that exists but cannot be opened counts as
 /// existing, so callers never treat it as something they created.
 pub fn key_exists(hive: HKEY, key: &str) -> bool {
@@ -295,5 +371,24 @@ mod tests {
         assert_eq!(subkeys(HKCU, &sandbox::path("registry-subkeys-missing")), Ok(vec![]));
 
         sandbox::wipe("registry-subkeys");
+    }
+
+    #[test]
+    fn registry_values_lists_a_sandbox_key() {
+        sandbox::wipe("registry-values");
+        let key = sandbox::path("registry-values");
+        write_string(HKCU, &key, "Template", "https://x/dns-query").unwrap();
+        write_dword(HKCU, &key, "Flags", 2).unwrap();
+
+        assert_eq!(
+            values(HKCU, &key),
+            Ok(vec![
+                ("Flags".to_string(), "REG_DWORD:2".to_string()),
+                ("Template".to_string(), "REG_SZ:https://x/dns-query".to_string()),
+            ])
+        );
+        assert_eq!(values(HKCU, &sandbox::path("registry-values-missing")), Ok(vec![]));
+
+        sandbox::wipe("registry-values");
     }
 }
