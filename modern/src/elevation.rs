@@ -44,13 +44,66 @@ pub enum Relaunch {
     Failed(String),
 }
 
+/// The elevated copy has been started: not waiting for it.
+pub enum Start {
+    Started,
+    /// The user declined the Windows permission prompt.
+    Declined,
+    Failed(String),
+}
+
+enum LaunchError {
+    Declined,
+    Failed(String),
+}
+
 /// Runs this program again as administrator and waits for it to finish.
 /// Windows asks the user for permission first. `args` must not contain
 /// spaces or quotes; they are passed on as written.
 pub fn relaunch_elevated(args: &[&str]) -> Relaunch {
+    let process = match launch(args) {
+        Ok(process) => process,
+        Err(LaunchError::Declined) => return Relaunch::Declined,
+        Err(LaunchError::Failed(reason)) => return Relaunch::Failed(reason),
+    };
+
+    unsafe {
+        WaitForSingleObject(process, INFINITE);
+        let mut exit_code = 0u32;
+        let read = GetExitCodeProcess(process, &mut exit_code);
+        let _ = CloseHandle(process);
+
+        match read {
+            Ok(()) => Relaunch::Finished(exit_code),
+            Err(_) => Relaunch::Failed("the administrator copy's result is unknown".to_string()),
+        }
+    }
+}
+
+/// Runs this program again as administrator and returns as soon as it has
+/// started, so the caller can exit and leave the work to the new window.
+/// Same rules for `args` as `relaunch_elevated`.
+pub fn start_elevated(args: &[&str]) -> Start {
+    match launch(args) {
+        Ok(process) => {
+            unsafe {
+                let _ = CloseHandle(process);
+            }
+            Start::Started
+        }
+        Err(LaunchError::Declined) => Start::Declined,
+        Err(LaunchError::Failed(reason)) => Start::Failed(reason),
+    }
+}
+
+/// Asks Windows to start this program as administrator. The caller owns the
+/// returned process handle.
+fn launch(args: &[&str]) -> Result<HANDLE, LaunchError> {
     let program = match std::env::current_exe() {
         Ok(path) => HSTRING::from(path.as_os_str()),
-        Err(error) => return Relaunch::Failed(format!("cannot locate the program: {error}")),
+        Err(error) => {
+            return Err(LaunchError::Failed(format!("cannot locate the program: {error}")));
+        }
     };
     let parameters = HSTRING::from(args.join(" "));
 
@@ -66,23 +119,14 @@ pub fn relaunch_elevated(args: &[&str]) -> Relaunch {
 
     unsafe {
         if let Err(error) = ShellExecuteExW(&mut info) {
-            return match error.code().0 as u32 & 0xFFFF {
-                ERROR_CANCELLED => Relaunch::Declined,
-                code => Relaunch::Failed(format!("could not start as administrator (error {code})")),
-            };
-        }
-        if info.hProcess.is_invalid() {
-            return Relaunch::Failed("the administrator copy did not start".to_string());
-        }
-
-        WaitForSingleObject(info.hProcess, INFINITE);
-        let mut exit_code = 0u32;
-        let read = GetExitCodeProcess(info.hProcess, &mut exit_code);
-        let _ = CloseHandle(info.hProcess);
-
-        match read {
-            Ok(()) => Relaunch::Finished(exit_code),
-            Err(_) => Relaunch::Failed("the administrator copy's result is unknown".to_string()),
+            return Err(match error.code().0 as u32 & 0xFFFF {
+                ERROR_CANCELLED => LaunchError::Declined,
+                code => LaunchError::Failed(format!("could not start as administrator (error {code})")),
+            });
         }
     }
+    if info.hProcess.is_invalid() {
+        return Err(LaunchError::Failed("the administrator copy did not start".to_string()));
+    }
+    Ok(info.hProcess)
 }

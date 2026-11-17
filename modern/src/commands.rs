@@ -2,6 +2,7 @@
 //! terminal is printed from here.
 
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::adapters::{self, NetworkAdapter};
@@ -48,46 +49,154 @@ pub fn preview(profile_id: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Applies a profile after showing the changes and asking for confirmation.
-pub fn apply(profile_id: &str, dry_run: bool, elevated_copy: bool) -> ExitCode {
-    let Some(profile) = find_profile(profile_id) else {
-        return ExitCode::from(2);
-    };
+/// What a menu action needs from the caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flow {
+    Finished,
+    /// Changing settings needs administrator rights and this copy has none.
+    /// Nothing was printed or changed.
+    NeedsAdmin,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Route {
+    /// Nothing would be written: say so, no administrator rights needed.
+    Report,
+    NeedsAdmin,
+    Proceed,
+}
+
+fn route(nothing_to_write: bool, elevated: bool) -> Route {
+    if nothing_to_write {
+        Route::Report
+    } else if elevated {
+        Route::Proceed
+    } else {
+        Route::NeedsAdmin
+    }
+}
+
+const UNDO_HINT_COMMAND: &str = "To undo: netshutup-modern revert";
+const UNDO_HINT_MENU: &str = "To undo: choose \"Revert last change\"";
+
+struct Prepared {
+    profile: Profile,
+    adapters: Vec<NetworkAdapter>,
+    plan: Vec<PlannedChange>,
+    needed: usize,
+}
+
+fn prepare(profile_id: &str) -> Option<Prepared> {
+    let profile = find_profile(profile_id)?;
     let adapters = profile_adapters();
     let plan = plan_profile(&profile, &adapters);
     let needed = plan.iter().filter(|change| change.is_needed()).count();
+    Some(Prepared { profile, adapters, plan, needed })
+}
 
-    print_preview(&profile, &plan, &adapters);
+enum Nothing {
+    Matches,
+    Blocked(String),
+}
+
+/// Why applying would write nothing, if it would not.
+fn nothing_to_write(prepared: &Prepared) -> Option<Nothing> {
+    if prepared.needed == 0 {
+        return Some(Nothing::Matches);
+    }
+    apply::check(&prepared.plan).err().map(Nothing::Blocked)
+}
+
+fn report_nothing(why: &Nothing) -> ExitCode {
+    match why {
+        Nothing::Matches => {
+            println!("\nNothing to do: every setting already matches this profile.");
+            ExitCode::SUCCESS
+        }
+        Nothing::Blocked(reason) => {
+            eprintln!("\nThis profile cannot be applied: {reason}.\nNothing was changed.");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn show_preview(prepared: &Prepared) {
+    print_preview(&prepared.profile, &prepared.plan, &prepared.adapters);
+}
+
+/// Applies a profile after showing the changes and asking for confirmation.
+pub fn apply(profile_id: &str, dry_run: bool, elevated_copy: bool) -> ExitCode {
+    let Some(prepared) = prepare(profile_id) else {
+        return ExitCode::from(2);
+    };
+
+    show_preview(&prepared);
 
     if dry_run {
         println!("\nDry run: nothing was changed.");
         return ExitCode::SUCCESS;
     }
-    if needed == 0 {
-        println!("\nNothing to do: every setting already matches this profile.");
-        return ExitCode::SUCCESS;
-    }
-    if let Err(reason) = apply::check(&plan) {
-        eprintln!("\nThis profile cannot be applied: {reason}.\nNothing was changed.");
-        return ExitCode::FAILURE;
+    if let Some(why) = nothing_to_write(&prepared) {
+        return report_nothing(&why);
     }
     if !elevation::is_elevated() {
-        return continue_elevated(&["apply", &profile.id], elevated_copy);
+        return continue_elevated(&["apply", &prepared.profile.id], elevated_copy);
     }
-    if !confirm(&format!("Apply {}? A backup is saved first.", count(needed, "change"))) {
+    write_profile(&prepared, &mut confirm, UNDO_HINT_COMMAND)
+}
+
+/// The menu's apply. Shows the preview only when it can also go on to write;
+/// without administrator rights it returns `Flow::NeedsAdmin` untouched, so the
+/// copy that has them shows the preview instead.
+pub fn menu_apply(profile_id: &str, ask: &mut dyn FnMut(&str) -> bool) -> Flow {
+    let Some(prepared) = prepare(profile_id) else {
+        return Flow::Finished;
+    };
+    let nothing = nothing_to_write(&prepared);
+
+    match route(nothing.is_some(), elevation::is_elevated()) {
+        Route::NeedsAdmin => Flow::NeedsAdmin,
+        Route::Report => {
+            show_preview(&prepared);
+            if let Some(why) = &nothing {
+                report_nothing(why);
+            }
+            Flow::Finished
+        }
+        Route::Proceed => {
+            show_preview(&prepared);
+            write_profile(&prepared, ask, UNDO_HINT_MENU);
+            Flow::Finished
+        }
+    }
+}
+
+/// Asks for confirmation, saves the backup and writes. Needs administrator rights.
+fn write_profile(
+    prepared: &Prepared,
+    ask: &mut dyn FnMut(&str) -> bool,
+    undo_hint: &str,
+) -> ExitCode {
+    let needed = prepared.needed;
+    if !ask(&format!("Apply {}? A backup is saved first.", count(needed, "change"))) {
         println!("Cancelled. Nothing was changed.");
         return ExitCode::SUCCESS;
     }
 
     let store = SystemStore::system();
-    let applied =
-        apply::apply(&store, &backup::default_dir(), &profile.id, &backup::timestamp_now(), &plan);
+    let applied = apply::apply(
+        &store,
+        &backup::default_dir(),
+        &prepared.profile.id,
+        &backup::timestamp_now(),
+        &prepared.plan,
+    );
 
     match applied {
         Ok(Some(backup_file)) => {
             println!("\nDone: {} changed.", count(needed, "setting"));
             println!("Backup: {}", backup_file.display());
-            println!("To undo: netshutup-modern revert");
+            println!("{undo_hint}");
             println!("{RESTART_NOTE}");
             ExitCode::SUCCESS
         }
@@ -116,21 +225,39 @@ pub fn apply(profile_id: &str, dry_run: bool, elevated_copy: bool) -> ExitCode {
     }
 }
 
-/// Restores the settings saved by the most recent apply.
-pub fn revert(elevated_copy: bool) -> ExitCode {
+enum Latest {
+    /// No backup exists.
+    Nothing,
+    /// A backup exists but cannot be read; the reason has been printed.
+    Unusable,
+    Found(PathBuf, Backup),
+}
+
+fn latest_backup() -> Latest {
     let Some(backup_file) = backup::latest(&backup::default_dir()) else {
-        println!("There is no change to revert.");
-        return ExitCode::SUCCESS;
+        return Latest::Nothing;
     };
-    let saved = match backup::load(&backup_file) {
-        Ok(saved) => saved,
+    match backup::load(&backup_file) {
+        Ok(saved) => Latest::Found(backup_file, saved),
         Err(reason) => {
             eprintln!("The latest backup cannot be used: {reason}");
             eprintln!("File: {}", backup_file.display());
-            return ExitCode::FAILURE;
+            Latest::Unusable
         }
-    };
+    }
+}
 
+fn report_no_backup(latest: &Latest) -> ExitCode {
+    match latest {
+        Latest::Nothing => {
+            println!("There is no change to revert.");
+            ExitCode::SUCCESS
+        }
+        _ => ExitCode::FAILURE,
+    }
+}
+
+fn show_revert(saved: &Backup) {
     let store = SystemStore::system();
     println!(
         "Revert \"{}\" (applied {}) — {} will be restored\n",
@@ -138,17 +265,57 @@ pub fn revert(elevated_copy: bool) -> ExitCode {
         saved.created,
         count(saved.entries.len(), "setting")
     );
-    print_table(["Setting", "Now", "Restored to"], &revert_rows(&store, &saved, &load_adapters()));
+    print_table(["Setting", "Now", "Restored to"], &revert_rows(&store, saved, &load_adapters()));
+}
+
+/// Restores the settings saved by the most recent apply.
+pub fn revert(elevated_copy: bool) -> ExitCode {
+    let latest = latest_backup();
+    let Latest::Found(backup_file, saved) = &latest else {
+        return report_no_backup(&latest);
+    };
+
+    show_revert(saved);
 
     if !elevation::is_elevated() {
         return continue_elevated(&["revert"], elevated_copy);
     }
-    if !confirm("Restore these settings?") {
+    restore_backup(backup_file, saved, &mut confirm)
+}
+
+/// The menu's revert; see `menu_apply` for when it shows things.
+pub fn menu_revert(ask: &mut dyn FnMut(&str) -> bool) -> Flow {
+    let latest = latest_backup();
+    let found = matches!(latest, Latest::Found(..));
+
+    match route(!found, elevation::is_elevated()) {
+        Route::NeedsAdmin => Flow::NeedsAdmin,
+        Route::Report => {
+            report_no_backup(&latest);
+            Flow::Finished
+        }
+        Route::Proceed => {
+            if let Latest::Found(backup_file, saved) = &latest {
+                show_revert(saved);
+                restore_backup(backup_file, saved, ask);
+            }
+            Flow::Finished
+        }
+    }
+}
+
+/// Asks for confirmation and puts the saved values back. Needs administrator rights.
+fn restore_backup(
+    backup_file: &Path,
+    saved: &Backup,
+    ask: &mut dyn FnMut(&str) -> bool,
+) -> ExitCode {
+    if !ask("Restore these settings?") {
         println!("Cancelled. Nothing was changed.");
         return ExitCode::SUCCESS;
     }
 
-    let errors = apply::revert(&store, &saved);
+    let errors = apply::revert(&SystemStore::system(), saved);
     if !errors.is_empty() {
         eprintln!("\nThese settings could not be restored:");
         for error in &errors {
@@ -159,7 +326,7 @@ pub fn revert(elevated_copy: bool) -> ExitCode {
     }
 
     println!("\nDone: {} restored.", count(saved.entries.len(), "setting"));
-    if let Err(reason) = backup::mark_reverted(&backup_file) {
+    if let Err(reason) = backup::mark_reverted(backup_file) {
         // Restoring twice is harmless, but the user should know why the
         // same backup would be offered again.
         eprintln!("Note: the backup could not be marked as used ({reason}).");
@@ -387,4 +554,21 @@ fn count(number: usize, noun: &str) -> String {
 
 fn or_dash(value: String) -> String {
     if value.is_empty() { "-".to_string() } else { value }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nothing_to_write_is_reported_without_asking_for_admin() {
+        assert_eq!(route(true, false), Route::Report);
+        assert_eq!(route(true, true), Route::Report);
+    }
+
+    #[test]
+    fn a_real_change_needs_admin_first() {
+        assert_eq!(route(false, false), Route::NeedsAdmin);
+        assert_eq!(route(false, true), Route::Proceed);
+    }
 }
