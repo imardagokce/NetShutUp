@@ -14,7 +14,7 @@ use crate::settings::reader::{self, State};
 use crate::settings::store::Store;
 
 /// Windows 11. Earlier Windows 10 builds have no usable encrypted DNS.
-const FIRST_BUILD_WITH_DOH: u32 = 22000;
+pub const FIRST_BUILD_WITH_DOH: u32 = 22000;
 
 /// Names tried, in order, to see whether DNS works at all; one success is enough.
 const TEST_NAMES: [&str; 2] = ["www.microsoft.com", "example.com"];

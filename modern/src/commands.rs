@@ -6,13 +6,16 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::adapters::{self, NetworkAdapter};
+use crate::dns::resolver::SystemResolver;
+use crate::dns::{self, Outcome, Precheck};
 use crate::elevation::{self, Relaunch, Start};
 use crate::menu::{self, Actions, ProfileChoice, Resume};
 use crate::settings::apply::{self, ApplyError, PlannedChange};
 use crate::settings::backup::{self, Backup};
 use crate::settings::catalog::{self, CATALOG, Scope};
-use crate::settings::profile::{self, Profile};
-use crate::settings::reader::{self, Origin};
+use crate::settings::profile::{self, Choose, DnsSpec, Profile};
+use crate::settings::provider;
+use crate::settings::reader::{self, Origin, State};
 use crate::settings::store::{Store, SystemStore};
 use crate::terminal::{self, Terminal};
 use crate::{style, version};
@@ -179,11 +182,24 @@ fn write_profile(
     ask: &mut dyn FnMut(&str) -> bool,
     undo_hint: &str,
 ) -> ExitCode {
-    let needed = prepared.needed;
-    if !ask(&format!("Apply {}? A backup is saved first.", count(needed, "change"))) {
+    if !ask(&format!("Apply {}? A backup is saved first.", count(prepared.needed, "change"))) {
         println!("Cancelled. Nothing was changed.");
         return ExitCode::SUCCESS;
     }
+
+    // Encrypted DNS is only changed when it can be proven afterwards: without
+    // a working internet connection it is left alone.
+    let dns_needed = prepared.plan.iter().filter(|c| is_dns(c) && c.is_needed()).count();
+    let mut plan = prepared.plan.clone();
+    if dns_needed > 0 {
+        let precheck = dns::precheck(&SystemResolver, version::get_windows_version().2);
+        if let Some(text) = dns::precheck_message(&precheck) {
+            println!("\n{text}");
+        }
+        plan = plan_for_precheck(&plan, &precheck);
+    }
+    let dns_applied = dns_needed > 0 && plan.iter().any(is_dns);
+    let needed = plan.iter().filter(|change| change.is_needed()).count();
 
     let store = SystemStore::system();
     let applied = apply::apply(
@@ -191,15 +207,32 @@ fn write_profile(
         &backup::default_dir(),
         &prepared.profile.id,
         &backup::timestamp_now(),
-        &prepared.plan,
+        &plan,
     );
 
     match applied {
         Ok(Some(backup_file)) => {
-            println!("\nDone: {} changed.", count(needed, "setting"));
+            let dns_outcome = if dns_applied { run_dns(prepared) } else { None };
+            let kept = matches!(dns_outcome, Some(Outcome::Encrypted { .. }));
+            let changed = changed_count(needed, if dns_applied { dns_needed } else { 0 }, kept);
+
+            println!("\nDone: {} changed.", count(changed, "setting"));
             println!("Backup: {}", backup_file.display());
             println!("{undo_hint}");
+            let mut exit = ExitCode::SUCCESS;
+            if let Some(outcome) = &dns_outcome {
+                if matches!(outcome, Outcome::ProgramError(_)) {
+                    eprintln!("\n{}", dns::message(outcome));
+                    exit = ExitCode::FAILURE;
+                } else {
+                    println!("\n{}", dns::message(outcome));
+                }
+            }
             println!("{RESTART_NOTE}");
+            exit
+        }
+        Ok(None) if dns_needed > 0 && !dns_applied => {
+            println!("\nNothing else to do: the other settings already match this profile.");
             ExitCode::SUCCESS
         }
         Ok(None) => {
@@ -212,11 +245,13 @@ fn write_profile(
         }
         Err(ApplyError::RolledBack { cause, leftovers }) if leftovers.is_empty() => {
             eprintln!("\nNot applied: {cause}.");
+            print_report_hint(&cause);
             eprintln!("The changes made up to that point were undone; your settings are as before.");
             ExitCode::FAILURE
         }
         Err(ApplyError::RolledBack { cause, leftovers }) => {
             eprintln!("\nNot applied: {cause}.");
+            print_report_hint(&cause);
             eprintln!("These settings could not be put back automatically:");
             for leftover in &leftovers {
                 eprintln!("  {leftover}");
@@ -225,6 +260,44 @@ fn write_profile(
             ExitCode::FAILURE
         }
     }
+}
+
+/// A failed DNS write is a problem on this computer or in NetShutUp, not a
+/// blocked network: ask for a private report.
+fn print_report_hint(cause: &str) {
+    if cause.starts_with(DNS_SETTING) {
+        eprintln!(
+            "This looks like a problem in NetShutUp. Please report it privately: {}",
+            dns::REPORT_URL
+        );
+    }
+}
+
+/// Runs the encrypted DNS trial for the DNS changes of a plan that was just applied.
+fn run_dns(prepared: &Prepared) -> Option<Outcome> {
+    let spec = prepared.profile.dns.as_ref()?;
+    let adapters: Vec<String> = prepared
+        .plan
+        .iter()
+        .filter(|change| is_dns(change))
+        .filter_map(|change| change.target.adapter.clone())
+        .collect();
+    let originals: Vec<(String, State)> = prepared
+        .plan
+        .iter()
+        .filter(|change| is_dns(change))
+        .filter_map(|change| Some((change.target.adapter.clone()?, change.current.clone())))
+        .collect();
+
+    println!("\nChecking encrypted DNS...");
+    Some(dns::run(
+        &SystemStore::system(),
+        &SystemResolver,
+        spec,
+        &adapters,
+        &originals,
+        &mut |line| println!("  {line}"),
+    ))
 }
 
 enum Latest {
@@ -489,8 +562,54 @@ fn profile_adapters() -> Vec<NetworkAdapter> {
 
 fn plan_profile(profile: &Profile, adapters: &[NetworkAdapter]) -> Vec<PlannedChange> {
     let guids: Vec<String> = adapters.iter().map(|adapter| adapter.guid.clone()).collect();
-    apply::plan(&SystemStore::system(), profile.targets(&guids))
+    let mut targets = profile.targets(&guids);
+    if dns_available() {
+        targets.extend(profile.dns_targets(&guids));
+    }
+    apply::plan(&SystemStore::system(), targets)
 }
+
+/// Encrypted DNS needs Windows 11; on older builds the DNS stage is left out
+/// of the plan altogether (the rest of the profile is unaffected).
+fn dns_available() -> bool {
+    version::get_windows_version().2 >= dns::FIRST_BUILD_WITH_DOH
+}
+
+const DNS_SETTING: &str = "dns.resolver";
+
+fn is_dns(change: &PlannedChange) -> bool {
+    change.target.setting.id == DNS_SETTING
+}
+
+/// What the After column says for the DNS rows: the provider is only
+/// settled when the trial runs, so say how it will be chosen.
+fn dns_after_text(spec: &DnsSpec) -> String {
+    let providers: Vec<&provider::Provider> =
+        spec.providers.iter().filter_map(|id| provider::find(id)).collect();
+    match (spec.choose, providers.first()) {
+        (Choose::FirstWorking, Some(first)) => catalog::find(DNS_SETTING)
+            .map_or_else(String::new, |setting| reader::format(setting, &first.state())),
+        (Choose::FirstWorking, None) => String::new(),
+        (Choose::Fastest, _) => {
+            let names: Vec<&str> = providers.iter().map(|provider| provider.name).collect();
+            format!("fastest of {} (DoH)", names.join(", "))
+        }
+    }
+}
+
+/// The plan without its DNS changes unless the precheck allows them.
+fn plan_for_precheck(plan: &[PlannedChange], precheck: &Precheck) -> Vec<PlannedChange> {
+    plan.iter()
+        .filter(|change| *precheck == Precheck::Go || !is_dns(change))
+        .cloned()
+        .collect()
+}
+
+/// How many settings ended up changed: DNS changes that were put back do not count.
+fn changed_count(needed: usize, dns_needed: usize, dns_kept: bool) -> usize {
+    if dns_kept { needed } else { needed.saturating_sub(dns_needed) }
+}
+
 
 fn print_adapters(adapters: &[NetworkAdapter]) {
     println!("\nNetwork Adapters ({}):", adapters.len());
@@ -529,7 +648,7 @@ fn print_settings(title: &str, scope: Scope, adapter_guid: Option<&str>) {
 }
 
 fn print_preview(profile: &Profile, plan: &[PlannedChange], adapters: &[NetworkAdapter]) {
-    let rows = preview_rows(plan, adapters);
+    let rows = preview_rows(plan, adapters, profile.dns.as_ref());
 
     println!("{} — {} of {} settings will change", profile.name, rows.len(), plan.len());
     println!("{}", profile.description);
@@ -543,18 +662,29 @@ fn print_preview(profile: &Profile, plan: &[PlannedChange], adapters: &[NetworkA
         1 => println!("  (1 setting already matches)"),
         unchanged => println!("  ({unchanged} settings already match)"),
     }
+    if profile.dns.is_some() && !dns_available() {
+        println!("  (DNS: this Windows version has no encrypted DNS, so DNS will not be changed)");
+    }
 }
 
 /// One `[setting, current, after]` row per setting that would change.
-fn preview_rows(plan: &[PlannedChange], adapters: &[NetworkAdapter]) -> Vec<[String; 3]> {
+fn preview_rows(
+    plan: &[PlannedChange],
+    adapters: &[NetworkAdapter],
+    dns: Option<&DnsSpec>,
+) -> Vec<[String; 3]> {
     plan.iter()
         .filter(|change| change.is_needed())
         .map(|change| {
             let setting = change.target.setting;
+            let after = match dns {
+                Some(spec) if is_dns(change) => dns_after_text(spec),
+                _ => reader::format_desired(setting, &change.target.desired),
+            };
             [
                 row_name(setting.name, change.target.adapter.as_deref(), adapters),
                 reader::format(setting, &change.current),
-                reader::format_desired(setting, &change.target.desired),
+                after,
             ]
         })
         .collect()
@@ -627,11 +757,63 @@ fn or_dash(value: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::apply::Target;
+    use crate::settings::reader::Value;
 
     #[test]
     fn nothing_to_write_is_reported_without_asking_for_admin() {
         assert_eq!(route(true, false), Route::Report);
         assert_eq!(route(true, true), Route::Report);
+    }
+
+    fn dns_spec(providers: &[&str], choose: Choose) -> DnsSpec {
+        DnsSpec { providers: providers.iter().map(|id| id.to_string()).collect(), choose }
+    }
+
+    fn planned(id: &str, adapter: Option<&str>, desired: State) -> PlannedChange {
+        PlannedChange {
+            target: Target {
+                setting: catalog::find(id).unwrap(),
+                adapter: adapter.map(str::to_string),
+                desired,
+            },
+            current: State::NotSet,
+        }
+    }
+
+    #[test]
+    fn dns_after_text_for_first_working_shows_the_first_provider() {
+        let spec = dns_spec(&["cloudflare", "google"], Choose::FirstWorking);
+        assert_eq!(dns_after_text(&spec), "1.1.1.1, 1.0.0.1 (DoH)");
+    }
+
+    #[test]
+    fn dns_after_text_for_fastest_names_the_candidates() {
+        let spec = dns_spec(&["cloudflare", "google"], Choose::Fastest);
+        assert_eq!(dns_after_text(&spec), "fastest of Cloudflare, Google (DoH)");
+    }
+
+    #[test]
+    fn dns_targets_are_dropped_unless_precheck_says_go() {
+        let google = provider::find("google").unwrap().state();
+        let plan = vec![
+            planned("dns.llmnr", None, State::Value(Value::Dword(0))),
+            planned("dns.resolver", Some("{A}"), google),
+        ];
+        let ids = |plan: &[PlannedChange]| -> Vec<&'static str> {
+            plan.iter().map(|change| change.target.setting.id).collect()
+        };
+
+        assert_eq!(ids(&plan_for_precheck(&plan, &Precheck::Go)), ["dns.llmnr", "dns.resolver"]);
+        assert_eq!(ids(&plan_for_precheck(&plan, &Precheck::NoInternet)), ["dns.llmnr"]);
+        assert_eq!(ids(&plan_for_precheck(&plan, &Precheck::Unsupported)), ["dns.llmnr"]);
+    }
+
+    #[test]
+    fn changed_count_excludes_dns_when_it_was_not_kept() {
+        assert_eq!(changed_count(5, 2, false), 3);
+        assert_eq!(changed_count(5, 2, true), 5);
+        assert_eq!(changed_count(1, 2, false), 0);
     }
 
     #[test]
