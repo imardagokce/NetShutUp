@@ -144,8 +144,9 @@ fn diagnostics_list(d: &Diagnostics) -> String {
     if !d.known_doh_servers.is_empty() {
         lines.push(format!("- Windows knows DoH servers: {}", d.known_doh_servers.join(", ")));
     }
-    // The text is already free of personal identifiers, but addresses can sit in names.
-    super::mask::scrub(&lines.join("\n")) + "\n"
+    // Not scrubbed as a whole: a driver version can look like an address. Fields
+    // that can hold addresses are masked when they are collected.
+    lines.join("\n") + "\n"
 }
 
 #[cfg(test)]
@@ -206,6 +207,29 @@ mod tests {
         let text = render_markdown(&sample(true));
         assert!(text.contains("## What this report contains"), "{text}");
         assert!(text.contains("How to send this report"), "{text}");
+    }
+
+    #[test]
+    fn render_keeps_driver_versions_that_look_like_addresses() {
+        use crate::selftest::diagnostics::{AdapterInfo, DriverInfo};
+        let mut report = sample(true);
+        report.diagnostics.adapters.push(AdapterInfo {
+            name: "Ethernet 1".into(),
+            description: "Intel Ethernet".into(),
+            kind: "Ethernet".into(),
+            up: true,
+            link_mbps: Some(1000),
+            mtu: Some(1500),
+            dhcp: Some(true),
+            ipv6: true,
+            driver: Some(DriverInfo {
+                provider: "Intel".into(),
+                version: "22.250.1.2".into(),
+                date: "2024-01-01".into(),
+            }),
+        });
+        let text = render_markdown(&report);
+        assert!(text.contains("22.250.1.2"), "{text}");
     }
 
     #[test]

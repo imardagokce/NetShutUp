@@ -518,7 +518,7 @@ fn header(app_version: &str, windows: (u32, u32, u32), elevated: bool) -> String
 pub fn menu(resume: Option<Resume>) -> ExitCode {
     let line = header(env!("CARGO_PKG_VERSION"), version::get_windows_version(), elevation::is_elevated());
     println!("{}\n", style::heading(&line));
-    if let Some(warning) = files::header_marker_line(files::unfinished_marker_exists()) {
+    if let Some(warning) = files::header_marker_line(&files::read_marker()) {
         println!("{}\n", style::changed(&warning));
     }
 

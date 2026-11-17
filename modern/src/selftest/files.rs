@@ -25,16 +25,80 @@ pub fn reports_dir() -> PathBuf {
     data_dir().join("reports")
 }
 
-pub fn unfinished_marker_exists() -> bool {
-    marker_path().exists()
+/// What the marker file says about the last self-test.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Marker {
+    /// No marker: the last self-test finished and everything was restored.
+    Clear,
+    /// A self-test is running or was cut off while nothing was applied.
+    Running,
+    /// A profile applied by the self-test is still in place; this is its backup.
+    Active(PathBuf),
+    /// The self-test ended but settings are not as they were.
+    NotRestored,
 }
 
-/// The warning the menu header shows when a self-test was interrupted.
-pub fn header_marker_line(exists: bool) -> Option<String> {
-    exists.then(|| {
-        "A previous self-test did not finish. Choose \"Revert last change\" to put your settings back."
-            .to_string()
-    })
+fn format_marker(marker: &Marker) -> Option<String> {
+    match marker {
+        Marker::Clear => None,
+        Marker::Running => Some("running".to_string()),
+        Marker::NotRestored => Some("not-restored".to_string()),
+        Marker::Active(path) => Some(format!("active {}", path.display())),
+    }
+}
+
+fn parse_marker(text: &str) -> Marker {
+    let text = text.trim();
+    match text.strip_prefix("active ") {
+        Some(path) => Marker::Active(PathBuf::from(path)),
+        None if text == "not-restored" => Marker::NotRestored,
+        None => Marker::Running,
+    }
+}
+
+pub fn read_marker() -> Marker {
+    match std::fs::read_to_string(marker_path()) {
+        Ok(text) => parse_marker(&text),
+        Err(_) => Marker::Clear,
+    }
+}
+
+pub fn write_marker(marker: &Marker) {
+    let path = marker_path();
+    match format_marker(marker) {
+        None => {
+            let _ = std::fs::remove_file(&path);
+        }
+        Some(text) => {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&path, text);
+        }
+    }
+}
+
+/// The marker after `reverted` was restored. A marker that names another backup stays.
+pub fn marker_after_revert(current: &Marker, reverted: &Path) -> Marker {
+    match current {
+        Marker::Active(path) if path != reverted => current.clone(),
+        _ => Marker::Clear,
+    }
+}
+
+/// The warning the menu header shows for an unfinished self-test.
+pub fn header_marker_line(marker: &Marker) -> Option<String> {
+    match marker {
+        Marker::Clear => None,
+        Marker::Running => Some(
+            "A previous self-test did not finish. It had not applied anything yet, so nothing needs undoing."
+                .to_string(),
+        ),
+        Marker::Active(_) | Marker::NotRestored => Some(
+            "A previous self-test did not leave your settings as they were. Choose \"Revert last change\" to put them back."
+                .to_string(),
+        ),
+    }
 }
 
 /// The current user's Desktop folder, when Windows can tell.
@@ -133,10 +197,37 @@ mod tests {
     }
 
     #[test]
-    fn header_warns_about_an_unfinished_selftest() {
-        assert_eq!(header_marker_line(false), None);
-        let line = header_marker_line(true).unwrap();
-        assert!(line.contains("did not finish"), "{line}");
-        assert!(line.contains("Revert last change"), "{line}");
+    fn marker_text_round_trips() {
+        for marker in [
+            Marker::Running,
+            Marker::NotRestored,
+            Marker::Active(PathBuf::from(r"C:\ProgramData\NetShutUp\backups\20261117-1.json")),
+        ] {
+            let text = format_marker(&marker).unwrap();
+            assert_eq!(parse_marker(&text), marker);
+        }
+        assert_eq!(format_marker(&Marker::Clear), None);
+    }
+
+    #[test]
+    fn header_line_depends_on_the_marker() {
+        assert_eq!(header_marker_line(&Marker::Clear), None);
+        let running = header_marker_line(&Marker::Running).unwrap();
+        assert!(running.contains("did not finish"), "{running}");
+        assert!(running.contains("nothing needs undoing"), "{running}");
+        for marker in [Marker::NotRestored, Marker::Active(PathBuf::from("x"))] {
+            let line = header_marker_line(&marker).unwrap();
+            assert!(line.contains("Revert last change"), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_revert_clears_the_marker_unless_it_names_another_backup() {
+        let mine = PathBuf::from("a.json");
+        let other = PathBuf::from("b.json");
+        assert_eq!(marker_after_revert(&Marker::Active(mine.clone()), &mine), Marker::Clear);
+        assert_eq!(marker_after_revert(&Marker::Active(mine.clone()), &other), Marker::Active(mine));
+        assert_eq!(marker_after_revert(&Marker::NotRestored, &other), Marker::Clear);
+        assert_eq!(marker_after_revert(&Marker::Running, &other), Marker::Clear);
     }
 }

@@ -8,10 +8,14 @@ use crate::dns::Resolver;
 use crate::dns::resolver::SystemResolver;
 use crate::elevation;
 use crate::settings::backup;
+use crate::settings::registry;
 use crate::settings::store::{Store, SystemStore};
 use crate::version;
 
-use super::files;
+use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
+
+use super::files::{self, Marker};
+use super::mask::mask_guid;
 use super::runner::{Env, EnvAdapter};
 
 pub struct SystemEnv {
@@ -59,16 +63,23 @@ impl Env for SystemEnv {
         backup::timestamp_now()
     }
 
-    fn set_in_progress(&self, on: bool) {
-        let marker = files::marker_path();
-        if on {
-            if let Some(parent) = marker.parent() {
-                let _ = std::fs::create_dir_all(parent);
+    fn mark(&self, marker: Marker) {
+        files::write_marker(&marker);
+    }
+
+    fn doh_entries(&self) -> Vec<String> {
+        let mut entries = Vec::new();
+        for adapter in self.adapters() {
+            let key = format!(
+                r"SYSTEM\CurrentControlSet\Services\Dnscache\InterfaceSpecificParameters\{}\DohInterfaceSettings\Doh",
+                adapter.guid
+            );
+            for server in registry::subkeys(HKEY_LOCAL_MACHINE, &key).unwrap_or_default() {
+                entries.push(format!("{}/{server}", mask_guid(&adapter.guid)));
             }
-            let _ = std::fs::write(&marker, b"running");
-        } else {
-            let _ = std::fs::remove_file(&marker);
         }
+        entries.sort();
+        entries
     }
 }
 

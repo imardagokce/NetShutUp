@@ -261,7 +261,12 @@ pub fn collect_network(
     products.dedup();
 
     let doh = registry::subkeys(HKEY_LOCAL_MACHINE, DOH_SERVERS_KEY).unwrap_or_default();
-    (infos, summarize_virtual(adapters), products, doh)
+    (infos, summarize_virtual(adapters), products, mask_servers(doh))
+}
+
+/// Server addresses as they may appear in a report: only the known providers stay readable.
+fn mask_servers(servers: Vec<String>) -> Vec<String> {
+    servers.into_iter().map(|server| super::mask::mask_ip(&server)).collect()
 }
 
 /// Virtual adapters grouped by kind. Descriptions and names are never copied:
@@ -429,6 +434,12 @@ doh: {doh:?}");
         let hardware = adapters.iter().filter(|a| a.is_hardware && !a.is_loopback).count();
         assert_eq!(infos.len(), hardware);
         assert!(infos.iter().all(|info| !info.description.is_empty()));
+    }
+
+    #[test]
+    fn known_doh_servers_are_masked_at_collection() {
+        let servers = vec!["192.168.1.2".to_string(), "1.1.1.1".to_string()];
+        assert_eq!(mask_servers(servers), ["192.168.x.x", "1.1.1.1"]);
     }
 
     #[test]

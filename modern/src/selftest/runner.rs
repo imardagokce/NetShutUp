@@ -19,6 +19,7 @@ use crate::settings::reader::{self, State};
 use crate::settings::store::Store;
 
 use super::diagnostics::Diagnostics;
+use super::files::Marker;
 use super::mask::mask_guid;
 use super::{Check, Cycle, Report, Status};
 
@@ -36,8 +37,11 @@ pub trait Env {
     fn backup_dir(&self) -> PathBuf;
     /// `YYYYMMDD-HHMMSS`.
     fn timestamp(&self) -> String;
-    /// Marks that a self-test is running (a file), so an interrupted one can be noticed.
-    fn set_in_progress(&self, on: bool);
+    /// Records the self-test's state in a file, so an interrupted one is noticed.
+    fn mark(&self, marker: Marker);
+    /// The per-adapter encrypted DNS entries Windows holds (masked), to see
+    /// whether any are left behind after the run.
+    fn doh_entries(&self) -> Vec<String>;
 }
 
 /// The value of every catalog setting: system-wide ones once, per-adapter ones
@@ -100,18 +104,17 @@ fn pass_or_fail(ok: bool) -> Status {
     if ok { Status::Pass } else { Status::Fail }
 }
 
-/// Runs the whole self-test. The in-progress marker is set for the duration;
-/// if the program dies mid-run the marker stays, which is the point.
+/// Runs the whole self-test. The marker says `Running` for the duration and
+/// names the backup of a profile while it is applied; if the program dies
+/// mid-run it stays, which is the point.
 pub fn run(
     env: &dyn Env,
     profiles: &[Profile],
     diagnostics: Diagnostics,
     say: &mut dyn FnMut(&str),
 ) -> Report {
-    env.set_in_progress(true);
-    let report = run_inner(env, profiles, diagnostics, say);
-    env.set_in_progress(false);
-    report
+    env.mark(Marker::Running);
+    run_inner(env, profiles, diagnostics, say)
 }
 
 fn run_inner(
@@ -128,6 +131,7 @@ fn run_inner(
     say("Checking the environment...");
     let (environment, can_write) = environment_checks(env, &adapters);
     let start = snapshot(env.store(), &adapters);
+    let doh_before = env.doh_entries();
 
     say("Checking that every setting can be read...");
     let reading = reading_checks(env, profiles, &adapters, &guids, dns_ok);
@@ -135,6 +139,7 @@ fn run_inner(
     let mut cycles = Vec::new();
     let mut created = Vec::new();
     let mut revert_failed = false;
+    let mut active: Option<PathBuf> = None;
     for profile in profiles {
         if !can_write {
             cycles.push(skipped_cycle(profile, "needs administrator rights, an Ethernet or Wi-Fi adapter and a writable backup folder"));
@@ -146,6 +151,7 @@ fn run_inner(
         say(&format!("{}: applying and reverting...", profile.name));
         let result = cycle(env, profile, &adapters, &guids, dns_ok, &mut created, say);
         revert_failed = result.revert_failed;
+        active = result.active;
         cycles.push(result.cycle);
     }
 
@@ -160,7 +166,21 @@ fn run_inner(
         began,
     )];
     let began = Instant::now();
-    let active: Vec<String> = created
+    let doh_after = env.doh_entries();
+    let doh_same = doh_before == doh_after;
+    closing.push(check(
+        "closing.doh_entries",
+        "No encrypted DNS entries are left behind",
+        pass_or_fail(doh_same),
+        &if doh_same {
+            "same as at the start".to_string()
+        } else {
+            format!("before: [{}]; after: [{}]", doh_before.join(", "), doh_after.join(", "))
+        },
+        began,
+    ));
+    let began = Instant::now();
+    let still_active: Vec<String> = created
         .iter()
         .filter(|path| path.exists())
         .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().to_string()))
@@ -168,11 +188,11 @@ fn run_inner(
     closing.push(check(
         "closing.backups",
         "Every backup made here is marked as reverted",
-        pass_or_fail(active.is_empty()),
-        &if active.is_empty() {
+        pass_or_fail(still_active.is_empty()),
+        &if still_active.is_empty() {
             format!("{} backup(s), all marked", created.len())
         } else {
-            format!("still active: {}", active.join(", "))
+            format!("still active: {}", still_active.join(", "))
         },
         began,
     ));
@@ -185,12 +205,19 @@ fn run_inner(
         began,
     ));
 
+    let all_restored = !revert_failed && differing.is_empty() && doh_same;
+    env.mark(match (all_restored, active) {
+        (true, _) => Marker::Clear,
+        (false, Some(path)) => Marker::Active(path),
+        (false, None) => Marker::NotRestored,
+    });
+
     Report {
         schema: Report::SCHEMA,
         program_version: env!("CARGO_PKG_VERSION").to_string(),
         created: env.timestamp(),
         total_millis: millis(started),
-        all_restored: !revert_failed && differing.is_empty(),
+        all_restored,
         diagnostics,
         environment,
         reading,
@@ -342,6 +369,8 @@ fn reading_checks(
 struct CycleResult {
     cycle: Cycle,
     revert_failed: bool,
+    /// The backup of a profile that is still applied because its revert failed.
+    active: Option<PathBuf>,
 }
 
 /// One profile: apply, verify, DNS trial, internet, revert, compare.
@@ -360,6 +389,7 @@ fn cycle(
     let done = |checks: Vec<Check>, revert_failed: bool| CycleResult {
         cycle: Cycle { profile: profile.id.clone(), checks },
         revert_failed,
+        active: None,
     };
     let before = snapshot(store, adapters);
 
@@ -398,6 +428,7 @@ fn cycle(
     let backup_path = match applied {
         Ok(Some(path)) => {
             created.push(path.clone());
+            env.mark(Marker::Active(path.clone()));
             checks.push(check("apply", "Apply", Status::Pass, &format!("{needed} change(s) written"), began));
             path
         }
@@ -529,8 +560,11 @@ fn cycle(
         began,
     ));
     if reverted.is_err() {
-        return done(checks, true);
+        let mut result = done(checks, true);
+        result.active = Some(backup_path);
+        return result;
     }
+    env.mark(Marker::Running);
 
     let began = Instant::now();
     let differing = differences(&before, &snapshot(store, adapters));
@@ -559,6 +593,7 @@ mod tests {
     use crate::settings::catalog::CATALOG;
     use crate::settings::profile;
     use crate::settings::reader::Value;
+    use crate::selftest::files::Marker;
     use crate::settings::store::testing::FakeStore;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -607,7 +642,9 @@ mod tests {
         adapters: Vec<EnvAdapter>,
         elevated: bool,
         dir: PathBuf,
-        marker: RefCell<Vec<bool>>,
+        marker: RefCell<Vec<Marker>>,
+        /// What `doh_entries` returns on successive calls (empty when used up).
+        doh: RefCell<std::collections::VecDeque<Vec<String>>>,
     }
 
     impl Env for FakeEnv {
@@ -632,8 +669,11 @@ mod tests {
         fn timestamp(&self) -> String {
             "20261117-120000".to_string()
         }
-        fn set_in_progress(&self, on: bool) {
-            self.marker.borrow_mut().push(on);
+        fn mark(&self, marker: Marker) {
+            self.marker.borrow_mut().push(marker);
+        }
+        fn doh_entries(&self) -> Vec<String> {
+            self.doh.borrow_mut().pop_front().unwrap_or_default()
         }
     }
 
@@ -655,6 +695,7 @@ mod tests {
             elevated: true,
             dir: temp_dir(name),
             marker: RefCell::new(Vec::new()),
+            doh: RefCell::new(Default::default()),
         }
     }
 
@@ -802,25 +843,57 @@ mod tests {
         assert!(report.cycles.iter().all(|c| c.checks.iter().all(|k| k.status == Status::Skip)));
     }
 
-    #[test]
-    fn marker_is_set_during_the_run_and_removed_after() {
-        let env = env("selftest-marker");
-        run_it(&env);
-        assert_eq!(env.marker.borrow().as_slice(), [true, false]);
-
+    fn privacy_writes() -> u32 {
         let probe = FakeStore::default();
         let guids = [A.to_string(), B.to_string()];
         let privacy = profile::builtin().unwrap().into_iter().find(|p| p.id == "privacy").unwrap();
         let (plan, _) = plan::plan_profile(&probe, &privacy, &guids, true);
-        let needed = plan.iter().filter(|change| change.is_needed()).count() as u32;
-        let stopping = env_with(
-            "selftest-marker-stop",
-            FakeStore { fail_after_writes: Some(needed), ..Default::default() },
-            &[A, B],
-        );
-        run_it(&stopping);
-        assert_eq!(stopping.marker.borrow().first(), Some(&true));
-        assert_eq!(stopping.marker.borrow().last(), Some(&false), "also when the run stops early");
+        plan.iter().filter(|change| change.is_needed()).count() as u32
+    }
+
+    #[test]
+    fn marker_is_set_during_the_run_and_cleared_after() {
+        let env = env("selftest-marker");
+        run_it(&env);
+        let marks = env.marker.borrow();
+        assert_eq!(marks.first(), Some(&Marker::Running));
+        assert!(marks.iter().any(|m| matches!(m, Marker::Active(_))), "the active backup is named");
+        assert_eq!(marks.last(), Some(&Marker::Clear));
+    }
+
+    #[test]
+    fn marker_names_the_backup_when_the_revert_fails() {
+        let store = FakeStore { fail_after_writes: Some(privacy_writes()), ..Default::default() };
+        let env = env_with("selftest-marker-stop", store, &[A, B]);
+        run_it(&env);
+        let marks = env.marker.borrow();
+        assert!(matches!(marks.last(), Some(Marker::Active(_))), "{marks:?}");
+    }
+
+    #[test]
+    fn marker_says_not_restored_when_only_a_difference_remains() {
+        let mut env = env("selftest-marker-diff");
+        let store = Rc::clone(&env.store);
+        env.resolver.on_lookup = Some(Box::new(move || {
+            if store.values.borrow().contains_key(&("dns.llmnr".to_string(), None)) {
+                store.seed("tcp.nagle.no_delay", Some(A), State::Value(Value::Dword(1)));
+            }
+        }));
+        run_it(&env);
+        assert_eq!(env.marker.borrow().last(), Some(&Marker::NotRestored));
+    }
+
+    #[test]
+    fn closing_fails_when_doh_entries_remain_after_the_run() {
+        let env = env("selftest-doh-left");
+        env.doh.borrow_mut().push_back(vec![]);
+        env.doh.borrow_mut().push_back(vec!["aaaaaaaa/1.1.1.1".to_string()]);
+
+        let report = run_it(&env);
+
+        let check = report.closing.iter().find(|c| c.id == "closing.doh_entries").unwrap();
+        assert_eq!(check.status, Status::Fail);
+        assert!(!report.all_restored);
     }
 
     #[test]
