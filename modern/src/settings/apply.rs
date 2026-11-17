@@ -15,6 +15,7 @@ use super::reader::{self, State};
 use super::store::Store;
 
 /// A setting and the state it should end up in.
+#[derive(Clone)]
 pub struct Target {
     pub setting: &'static Setting,
     pub adapter: Option<String>,
@@ -22,6 +23,7 @@ pub struct Target {
     pub desired: State,
 }
 
+#[derive(Clone)]
 pub struct PlannedChange {
     pub target: Target,
     pub current: State,

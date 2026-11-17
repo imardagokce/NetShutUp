@@ -7,5 +7,6 @@
     { "id": "privacy.telemetry_level", "set": { "dword": 0 } },
     { "id": "dns.llmnr", "set": { "dword": 0 } },
     { "id": "update.delivery_optimization", "set": { "dword": 0 } }
-  ]
+  ],
+  "dns": { "providers": ["quad9", "cloudflare"], "choose": "first_working" }
 }

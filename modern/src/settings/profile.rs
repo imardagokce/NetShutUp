@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 use super::apply::Target;
 use super::catalog::{self, Scope, Source};
+use super::provider;
 use super::reader::{State, Value};
 
 /// In the order they are offered to the user.
@@ -29,6 +30,26 @@ pub struct Profile {
     pub name: String,
     pub description: String,
     pub settings: Vec<Assignment>,
+    /// Which DNS providers to try; profiles that leave DNS alone omit it.
+    #[serde(default)]
+    pub dns: Option<DnsSpec>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DnsSpec {
+    /// Provider ids (see `provider`), in the order they are tried.
+    pub providers: Vec<String>,
+    pub choose: Choose,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Choose {
+    /// Keep the first provider that works.
+    FirstWorking,
+    /// Try them all and keep the fastest that works.
+    Fastest,
 }
 
 /// One catalog setting and the value a profile gives it.
@@ -103,7 +124,44 @@ impl Profile {
                 return Err(format!("profile {}: {id} has a value of the wrong kind", self.id));
             }
         }
+        self.validate_dns()
+    }
+
+    fn validate_dns(&self) -> Result<(), String> {
+        let Some(spec) = &self.dns else {
+            return Ok(());
+        };
+        if spec.providers.is_empty() {
+            return Err(format!("profile {}: DNS providers are empty", self.id));
+        }
+        let mut seen = HashSet::new();
+        for name in &spec.providers {
+            if provider::find(name).is_none() {
+                return Err(format!("profile {}: unknown DNS provider {name}", self.id));
+            }
+            if !seen.insert(name.as_str()) {
+                return Err(format!("profile {}: DNS provider {name} is listed twice", self.id));
+            }
+        }
         Ok(())
+    }
+
+    /// The DNS change this profile aims for: every one of `adapters` (GUIDs)
+    /// gets the first provider. Later providers are only tried when it does
+    /// not work. Empty when the profile leaves DNS alone.
+    pub fn dns_targets(&self, adapters: &[String]) -> Vec<Target> {
+        let Some(spec) = &self.dns else {
+            return Vec::new();
+        };
+        let (Some(first), Some(setting)) =
+            (spec.providers.first().and_then(|name| provider::find(name)), catalog::find("dns.resolver"))
+        else {
+            return Vec::new();
+        };
+        adapters
+            .iter()
+            .map(|guid| Target { setting, adapter: Some(guid.clone()), desired: first.state() })
+            .collect()
     }
 
     /// What applying this profile would aim for. Per-adapter settings get one
@@ -212,5 +270,76 @@ mod tests {
 
         // Without a usable adapter only the system-wide settings remain.
         assert_eq!(profile.targets(&[]).len(), 1);
+    }
+
+    fn with_dns(dns: &str) -> String {
+        format!(r#"{{"id":"t","name":"T","description":"test","settings":[],"dns":{dns}}}"#)
+    }
+
+    #[test]
+    fn dns_section_parses_and_unknown_provider_is_rejected() {
+        let profile = parse(&with_dns(r#"{"providers":["quad9"],"choose":"fastest"}"#)).unwrap();
+        let spec = profile.dns.unwrap();
+        assert_eq!(spec.providers, ["quad9"]);
+        assert_eq!(spec.choose, Choose::Fastest);
+
+        let error = parse(&with_dns(r#"{"providers":["nope"],"choose":"first_working"}"#));
+        assert_eq!(error.unwrap_err(), "profile t: unknown DNS provider nope");
+    }
+
+    #[test]
+    fn dns_section_rejects_empty_and_duplicate_providers() {
+        let empty = parse(&with_dns(r#"{"providers":[],"choose":"first_working"}"#));
+        assert_eq!(empty.unwrap_err(), "profile t: DNS providers are empty");
+        let twice = parse(&with_dns(r#"{"providers":["quad9","quad9"],"choose":"first_working"}"#));
+        assert_eq!(twice.unwrap_err(), "profile t: DNS provider quad9 is listed twice");
+    }
+
+    #[test]
+    fn builtin_profiles_have_the_designed_dns_sections() {
+        let found: Vec<(String, Vec<String>, Choose)> = builtin()
+            .unwrap()
+            .into_iter()
+            .map(|profile| {
+                let spec = profile.dns.expect("every built-in profile sets DNS");
+                (profile.id, spec.providers, spec.choose)
+            })
+            .collect();
+        let providers = |names: &[&str]| names.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            found,
+            [
+                ("privacy".to_string(), providers(&["quad9", "cloudflare"]), Choose::FirstWorking),
+                ("performance".to_string(), providers(&["cloudflare", "google"]), Choose::Fastest),
+                ("recommended".to_string(), providers(&["cloudflare", "google"]), Choose::FirstWorking),
+            ]
+        );
+    }
+
+    #[test]
+    fn dns_targets_cover_every_adapter_with_the_first_provider() {
+        let profile = parse(&with_dns(r#"{"providers":["google","quad9"],"choose":"first_working"}"#)).unwrap();
+        let adapters = ["{A}".to_string(), "{B}".to_string()];
+        let targets = profile.dns_targets(&adapters);
+
+        let summary: Vec<(&str, Option<&str>)> =
+            targets.iter().map(|t| (t.setting.id, t.adapter.as_deref())).collect();
+        assert_eq!(summary, [("dns.resolver", Some("{A}")), ("dns.resolver", Some("{B}"))]);
+        let google = provider::find("google").unwrap().state();
+        assert!(targets.iter().all(|target| target.desired == google));
+        assert!(profile.dns_targets(&[]).is_empty());
+    }
+
+    #[test]
+    fn profiles_without_a_dns_section_have_no_dns_targets() {
+        let profile = parse(&with_settings(r#"{"id":"dns.llmnr","set":{"dword":0}}"#)).unwrap();
+        assert!(profile.dns.is_none());
+        assert!(profile.dns_targets(&["{A}".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn assignments_cannot_set_dns_resolver_directly() {
+        let error = parse(&with_settings(r#"{"id":"dns.resolver","set":{"text":"1.1.1.1"}}"#));
+        assert_eq!(error.unwrap_err(), "profile t: dns.resolver has a value of the wrong kind");
     }
 }

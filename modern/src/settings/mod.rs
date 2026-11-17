@@ -3,6 +3,7 @@ pub mod backup;
 pub mod catalog;
 pub mod interface_dns;
 pub mod profile;
+pub mod provider;
 pub mod reader;
 pub mod registry;
 pub mod service;
