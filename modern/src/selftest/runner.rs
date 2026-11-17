@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use crate::dns::dot::DotBackend;
 use crate::dns::{self, Outcome, Precheck, Resolver};
 use crate::settings::apply::{self, ApplyError};
 use crate::settings::backup;
@@ -30,6 +31,8 @@ pub struct EnvAdapter {
 pub trait Env {
     fn store(&self) -> &dyn Store;
     fn resolver(&self) -> &dyn Resolver;
+    /// The experimental DoT list; a fake in tests so nothing real is touched.
+    fn dot_backend(&self) -> &dyn DotBackend;
     /// The Ethernet and Wi-Fi hardware adapters profiles apply to.
     fn adapters(&self) -> Vec<EnvAdapter>;
     fn windows_build(&self) -> u32;
@@ -534,9 +537,17 @@ fn cycle(
     if let (true, Some(spec)) = (to_apply.iter().any(plan::is_dns), profile.dns.as_ref()) {
         let (scope, originals) = plan::dns_trial_scope(&to_apply);
         let began = Instant::now();
-        let outcome = dns::run(store, resolver, spec, &scope, &originals, &mut *say);
+        let outcome = dns::run(
+            store,
+            resolver,
+            spec,
+            &scope,
+            &originals,
+            Some((env.dot_backend(), &backup_path)),
+            &mut *say,
+        );
         match &outcome {
-            Outcome::Encrypted { provider, skipped } => {
+            Outcome::Encrypted { provider, skipped, .. } => {
                 let detail = if skipped.is_empty() {
                     format!("{provider} works")
                 } else {
@@ -709,6 +720,28 @@ mod tests {
         export: Result<Vec<String>, String>,
         restore: Result<String, String>,
         finished: Cell<u32>,
+        dot: FakeDot,
+    }
+
+    /// An in-memory DoT list.
+    #[derive(Default)]
+    struct FakeDot(RefCell<std::collections::HashMap<String, crate::dns::dot::EntryValues>>);
+
+    impl DotBackend for FakeDot {
+        fn read(&self, address: &str) -> Result<Option<crate::dns::dot::EntryValues>, String> {
+            Ok(self.0.borrow().get(address).cloned())
+        }
+        fn add(&self, address: &str, host: &str) -> Result<(), String> {
+            self.0.borrow_mut().insert(address.to_string(), vec![("DotHost".into(), host.into())]);
+            Ok(())
+        }
+        fn restore(&self, address: &str, saved: &Option<crate::dns::dot::EntryValues>) -> Result<(), String> {
+            match saved {
+                Some(values) => self.0.borrow_mut().insert(address.to_string(), values.clone()),
+                None => self.0.borrow_mut().remove(address),
+            };
+            Ok(())
+        }
     }
 
     impl Env for FakeEnv {
@@ -717,6 +750,9 @@ mod tests {
         }
         fn resolver(&self) -> &dyn Resolver {
             &self.resolver
+        }
+        fn dot_backend(&self) -> &dyn DotBackend {
+            &self.dot
         }
         fn adapters(&self) -> Vec<EnvAdapter> {
             self.adapters.iter().map(|a| EnvAdapter { guid: a.guid.clone() }).collect()
@@ -772,6 +808,7 @@ mod tests {
             export: Ok(vec!["Dnscache.reg".to_string(); 7]),
             restore: Ok("created".to_string()),
             finished: Cell::new(0),
+            dot: FakeDot::default(),
         }
     }
 

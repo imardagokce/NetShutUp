@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::adapters::{self, NetworkAdapter};
+use crate::dns::dot::SystemDotBackend;
 use crate::dns::resolver::SystemResolver;
 use crate::dns::{self, Outcome};
 use crate::elevation::{self, Relaunch, Start};
@@ -218,7 +219,7 @@ fn write_profile(
 
     match applied {
         Ok(Some(backup_file)) => {
-            let dns_outcome = if dns_applied { run_dns(prepared) } else { None };
+            let dns_outcome = if dns_applied { run_dns(prepared, &backup_file) } else { None };
             let kept = matches!(dns_outcome, Some(Outcome::Encrypted { .. }));
             let changed = changed_count(needed, if dns_applied { dns_needed } else { 0 }, kept);
 
@@ -283,7 +284,7 @@ fn print_report_hint(cause: &str) {
 }
 
 /// Runs the encrypted DNS trial for the DNS changes of a plan that was just applied.
-fn run_dns(prepared: &Prepared) -> Option<Outcome> {
+fn run_dns(prepared: &Prepared, backup_file: &Path) -> Option<Outcome> {
     let spec = prepared.profile.dns.as_ref()?;
     let (adapters, originals) = dns_trial_scope(&prepared.plan);
 
@@ -294,6 +295,7 @@ fn run_dns(prepared: &Prepared) -> Option<Outcome> {
         spec,
         &adapters,
         &originals,
+        Some((&SystemDotBackend, backup_file)),
         &mut |line| println!("  {line}"),
     ))
 }

@@ -3,17 +3,16 @@
 //! and put the original DNS back if nothing works. The logic only talks to a
 //! `Store` and a `Resolver`, so it is tested with fakes.
 
-// The DoT backend is wired into the trial by plan tasks 3 and 4.
-#[allow(dead_code)]
 pub mod dot;
 pub mod resolver;
 
+use std::path::Path;
 use std::time::Duration;
 
 use crate::settings::catalog::{self, Setting};
 use crate::settings::profile::{Choose, DnsSpec};
 use crate::settings::provider::{self, Provider};
-use crate::settings::reader::{self, State};
+use crate::settings::reader::{self, DnsServer, State, Value};
 use crate::settings::store::Store;
 
 /// Windows 11. Earlier Windows 10 builds have no usable encrypted DNS.
@@ -61,25 +60,107 @@ pub fn internet_works(resolver: &dyn Resolver) -> bool {
     TEST_NAMES.iter().any(|name| resolver.lookup(name).is_ok())
 }
 
+/// How encrypted DNS was reached for a provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Method {
+    Doh,
+    /// Experimental: through Windows' own encrypted DNS server list.
+    Dot,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
-    /// Encrypted DNS works. `skipped` are the providers that did not, by name.
-    Encrypted { provider: String, skipped: Vec<String> },
+    /// Encrypted DNS works. `skipped` are the attempts that did not, as labels
+    /// like "Cloudflare (DoH)" (plain names when DoT is not in play).
+    Encrypted { provider: String, method: Method, skipped: Vec<String> },
     /// None worked; DNS is back as it was. `internet_ok` is whether DNS
-    /// resolves again after putting it back.
+    /// resolves again after putting it back. `tried` holds the same labels.
     FellBack { tried: Vec<String>, internet_ok: bool },
     /// NetShutUp itself failed; DNS was put back where possible.
     ProgramError(String),
 }
 
+/// The experimental DoT path: its backend, the apply backup (the sidecar goes
+/// next to it) and what the global list held before anything was touched.
+struct Dot<'a> {
+    backend: &'a dyn dot::DotBackend,
+    backup: &'a Path,
+    saved: Option<dot::Saved>,
+}
+
+impl Dot<'_> {
+    /// Saves every server address of every provider, once, before the first write.
+    fn ensure_saved(&mut self, providers: &[&Provider]) -> Result<(), String> {
+        if self.saved.is_some() {
+            return Ok(());
+        }
+        let addresses: Vec<String> =
+            providers.iter().flat_map(|p| p.servers.iter().map(|a| a.to_string())).collect();
+        let saved = dot::snapshot(self.backend, &addresses)?;
+        dot::save(&dot::sidecar_path(self.backup), &saved)?;
+        self.saved = Some(saved);
+        Ok(())
+    }
+
+    /// Puts the entries of the given addresses back as saved; the error messages.
+    fn restore(&self, addresses: &[&str]) -> Vec<String> {
+        let Some(saved) = &self.saved else { return Vec::new() };
+        let part = dot::Saved {
+            entries: saved
+                .entries
+                .iter()
+                .filter(|entry| addresses.contains(&entry.address.as_str()))
+                .cloned()
+                .collect(),
+        };
+        dot::restore_all(self.backend, &part)
+    }
+
+    fn restore_everything(&self) -> Vec<String> {
+        match &self.saved {
+            Some(saved) => dot::restore_all(self.backend, saved),
+            None => Vec::new(),
+        }
+    }
+}
+
+fn label(provider: &Provider, method: Method, with_method: bool) -> String {
+    match (with_method, method) {
+        (false, _) => provider.name.to_string(),
+        (true, Method::Doh) => format!("{} (DoH)", provider.name),
+        (true, Method::Dot) => format!("{} (DoT)", provider.name),
+    }
+}
+
+/// The provider's servers without any DoH information: Windows upgrades to DoT itself.
+fn dot_state(provider: &Provider) -> State {
+    State::Value(Value::Dns(
+        provider
+            .servers
+            .iter()
+            .map(|address| DnsServer { address: address.to_string(), doh: None })
+            .collect(),
+    ))
+}
+
+fn state_for(provider: &Provider, method: Method) -> State {
+    match method {
+        Method::Doh => provider.state(),
+        Method::Dot => dot_state(provider),
+    }
+}
+
 /// Runs the trial. The apply engine has already written the first provider of
-/// `spec` to `adapters`; `originals` holds what each adapter had before.
+/// `spec` to `adapters`; `originals` holds what each adapter had before. With
+/// `dot` (backend and the apply backup path), a provider whose DoH failed is
+/// also tried over DoT (experimental).
 pub fn run(
     store: &dyn Store,
     resolver: &dyn Resolver,
     spec: &DnsSpec,
     adapters: &[String],
     originals: &[(String, State)],
+    dot: Option<(&dyn dot::DotBackend, &Path)>,
     say: &mut dyn FnMut(&str),
 ) -> Outcome {
     let Some(setting) = catalog::find("dns.resolver") else {
@@ -90,52 +171,110 @@ pub fn run(
     if providers.is_empty() {
         return Outcome::ProgramError("the profile names no known DNS provider".to_string());
     }
+    let with_method = dot.is_some();
+    let mut dot = dot.map(|(backend, backup)| Dot { backend, backup, saved: None });
 
     let mut skipped: Vec<String> = Vec::new();
-    let mut working: Vec<(usize, Duration)> = Vec::new();
-    let mut last_written = 0;
+    let mut working: Vec<(usize, Method, Duration)> = Vec::new();
+    let mut last_written = (0, Method::Doh);
 
     for (index, provider) in providers.iter().enumerate() {
         if index > 0 {
             if let Err(reason) = write_all(store, setting, adapters, &provider.state()) {
-                return fail(store, resolver, setting, originals, reason);
+                return fail(store, resolver, setting, originals, dot.as_ref(), reason);
             }
-            last_written = index;
+            last_written = (index, Method::Doh);
         }
         resolver.flush_cache();
         say(&format!("Trying {} (encrypted DNS)...", provider.name));
 
-        if !TEST_NAMES.iter().any(|name| resolver.lookup(name).is_ok()) {
-            skipped.push(provider.name.to_string());
+        if TEST_NAMES.iter().any(|name| resolver.lookup(name).is_ok()) {
+            match spec.choose {
+                Choose::FirstWorking => {
+                    return Outcome::Encrypted {
+                        provider: provider.name.to_string(),
+                        method: Method::Doh,
+                        skipped,
+                    };
+                }
+                Choose::Fastest => {
+                    let time = measure(resolver).unwrap_or(Duration::MAX);
+                    say(&format!("  {}: {}", provider.name, describe(time)));
+                    working.push((index, Method::Doh, time));
+                }
+            }
             continue;
         }
-        match spec.choose {
-            Choose::FirstWorking => {
-                return Outcome::Encrypted { provider: provider.name.to_string(), skipped };
+        skipped.push(label(provider, Method::Doh, with_method));
+
+        let Some(dot) = dot.as_mut() else { continue };
+        let started = dot
+            .ensure_saved(&providers)
+            .and_then(|()| dot::add_provider(dot.backend, provider))
+            .and_then(|()| write_all(store, setting, adapters, &dot_state(provider)));
+        if let Err(reason) = started {
+            return fail(store, resolver, setting, originals, Some(&*dot), reason);
+        }
+        last_written = (index, Method::Dot);
+        resolver.flush_cache();
+        say(&format!("Trying {} (DoT, experimental)...", provider.name));
+
+        if TEST_NAMES.iter().any(|name| resolver.lookup(name).is_ok()) {
+            match spec.choose {
+                Choose::FirstWorking => {
+                    return Outcome::Encrypted {
+                        provider: provider.name.to_string(),
+                        method: Method::Dot,
+                        skipped,
+                    };
+                }
+                Choose::Fastest => {
+                    let time = measure(resolver).unwrap_or(Duration::MAX);
+                    say(&format!("  {} (DoT): {}", provider.name, describe(time)));
+                    working.push((index, Method::Dot, time));
+                }
             }
-            Choose::Fastest => {
-                let time = measure(resolver).unwrap_or(Duration::MAX);
-                say(&format!("  {}: {}", provider.name, describe(time)));
-                working.push((index, time));
-            }
+            continue;
+        }
+        skipped.push(label(provider, Method::Dot, true));
+        let errors = dot.restore(&provider.servers);
+        if !errors.is_empty() {
+            let reason = format!("DoT entries could not be put back: {}", errors.join("; "));
+            return fail(store, resolver, setting, originals, Some(&*dot), reason);
         }
     }
 
-    if let Some(&(best, _)) = working.iter().min_by_key(|(_, time)| *time) {
-        if best != last_written {
-            if let Err(reason) = write_all(store, setting, adapters, &providers[best].state()) {
-                return fail(store, resolver, setting, originals, reason);
+    if let Some(&(best, method, _)) = working.iter().min_by_key(|(_, _, time)| *time) {
+        if (best, method) != last_written {
+            if let Err(reason) = write_all(store, setting, adapters, &state_for(providers[best], method)) {
+                return fail(store, resolver, setting, originals, dot.as_ref(), reason);
             }
             resolver.flush_cache();
         }
-        return Outcome::Encrypted { provider: providers[best].name.to_string(), skipped };
+        // DoT entries of working candidates that were not chosen go back.
+        if let Some(dot) = dot.as_ref() {
+            let mut errors = Vec::new();
+            for &(index, other, _) in &working {
+                if other == Method::Dot && (index, other) != (best, method) {
+                    errors.extend(dot.restore(&providers[index].servers));
+                }
+            }
+            if !errors.is_empty() {
+                let reason = format!("DoT entries could not be put back: {}", errors.join("; "));
+                return fail(store, resolver, setting, originals, Some(dot), reason);
+            }
+        }
+        return Outcome::Encrypted {
+            provider: providers[best].name.to_string(),
+            method,
+            skipped,
+        };
     }
 
-    let tried = providers.iter().map(|provider| provider.name.to_string()).collect();
-    match restore(store, resolver, setting, originals) {
+    match restore_everything(store, resolver, setting, originals, dot.as_ref()) {
         Ok(()) => {
             let internet_ok = internet_works(resolver);
-            Outcome::FellBack { tried, internet_ok }
+            Outcome::FellBack { tried: skipped, internet_ok }
         }
         Err(reason) => Outcome::ProgramError(reason),
     }
@@ -160,18 +299,41 @@ fn write_all(
     Ok(())
 }
 
-/// A program error: puts the originals back, and says so if that fails too.
+/// A program error: puts the originals (and any DoT entries) back, and says so
+/// if that fails too.
 fn fail(
     store: &dyn Store,
     resolver: &dyn Resolver,
     setting: &Setting,
     originals: &[(String, State)],
+    dot: Option<&Dot>,
     reason: String,
 ) -> Outcome {
-    match restore(store, resolver, setting, originals) {
+    match restore_everything(store, resolver, setting, originals, dot) {
         Ok(()) => Outcome::ProgramError(reason),
         Err(left_over) => Outcome::ProgramError(format!("{reason}; {left_over}")),
     }
+}
+
+/// Adapter DNS first, then every DoT entry; all problems in one message.
+fn restore_everything(
+    store: &dyn Store,
+    resolver: &dyn Resolver,
+    setting: &Setting,
+    originals: &[(String, State)],
+    dot: Option<&Dot>,
+) -> Result<(), String> {
+    let mut problems = Vec::new();
+    if let Err(reason) = restore(store, resolver, setting, originals) {
+        problems.push(reason);
+    }
+    if let Some(dot) = dot {
+        let errors = dot.restore_everything();
+        if !errors.is_empty() {
+            problems.push(format!("DoT entries could not be put back: {}", errors.join("; ")));
+        }
+    }
+    if problems.is_empty() { Ok(()) } else { Err(problems.join("; ")) }
 }
 
 /// Puts every adapter's DNS back as it was. Keeps going after a failure.
@@ -254,13 +416,20 @@ pub fn ipv6_note(outcome: &Outcome) -> Option<&'static str> {
 /// report; a network that blocks encrypted DNS is not a bug.
 pub fn message(outcome: &Outcome) -> String {
     match outcome {
-        Outcome::Encrypted { provider, skipped } if skipped.is_empty() => {
-            format!("Encrypted DNS is on: {provider} (DoH).")
+        Outcome::Encrypted { provider, method, skipped } => {
+            let on = match method {
+                Method::Doh => format!("Encrypted DNS is on: {provider} (DoH)."),
+                Method::Dot => format!("Encrypted DNS is on: {provider} (DoT, experimental)."),
+            };
+            if skipped.is_empty() {
+                return on;
+            }
+            let instead = match method {
+                Method::Doh => provider.clone(),
+                Method::Dot => format!("{provider} (DoT)"),
+            };
+            format!("{} did not work on this network; using {instead} instead.\n{on}", skipped.join(", "))
         }
-        Outcome::Encrypted { provider, skipped } => format!(
-            "{} did not work on this network; using {provider} instead.\nEncrypted DNS is on: {provider} (DoH).",
-            skipped.join(", ")
-        ),
         Outcome::FellBack { internet_ok: true, .. } => "Encrypted DNS did not work on this network, so your DNS was put back as it was. Nothing is broken.".to_string(),
         Outcome::FellBack { internet_ok: false, .. } => format!(
             "Encrypted DNS did not work on this network, and your DNS was put back as it was, but the internet does not seem to work right now.\nIf it stays that way, please check your connection. If you think it is a problem in NetShutUp, report it privately: {REPORT_URL}"
@@ -276,7 +445,8 @@ mod tests {
     use super::*;
     use crate::settings::reader::{DnsServer, Value};
     use crate::settings::store::testing::FakeStore;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
 
     const A: &str = "{A}";
     const B: &str = "{B}";
@@ -327,6 +497,8 @@ mod tests {
         /// When set, ignores the store: every name resolves (or none does).
         all: Option<bool>,
         failing_names: Vec<&'static str>,
+        /// A DoT fake: adapters without DoH resolve only when it has a working entry.
+        dot: Option<&'a FakeDot>,
         lookups: Cell<u32>,
     }
 
@@ -338,6 +510,7 @@ mod tests {
                 durations: Vec::new(),
                 all: None,
                 failing_names: Vec::new(),
+                dot: None,
                 lookups: Cell::new(0),
             }
         }
@@ -357,13 +530,19 @@ mod tests {
                     Err(format!("{name}: simulated failure"))
                 };
             }
-            let first = match self.store.read(dns_setting(), Some(A)) {
-                State::Value(Value::Dns(servers)) => servers[0].address.clone(),
+            let (first, plain) = match self.store.read(dns_setting(), Some(A)) {
+                State::Value(Value::Dns(servers)) => (servers[0].address.clone(), servers[0].doh.is_none()),
                 // DHCP: the key "" in `works_for` means plain DHCP DNS works.
-                State::NotSet => String::new(),
+                State::NotSet => (String::new(), false),
                 _ => return Err("no servers".to_string()),
             };
-            if !self.works_for.contains(&first.as_str()) {
+            let works = match self.dot {
+                Some(dot) if plain => {
+                    dot.works.contains(&first.as_str()) && dot.entries.borrow().contains_key(&first)
+                }
+                _ => self.works_for.contains(&first.as_str()),
+            };
+            if !works {
                 return Err(format!("{name}: simulated failure"));
             }
             let millis =
@@ -381,7 +560,7 @@ mod tests {
         adapters: &[String],
         originals: &[(String, State)],
     ) -> Outcome {
-        run(store, resolver, spec, adapters, originals, &mut |_| {})
+        run(store, resolver, spec, adapters, originals, None, &mut |_| {})
     }
 
     fn names(list: &[&str]) -> Vec<String> {
@@ -429,10 +608,11 @@ mod tests {
             &spec(&["cloudflare", "google"], Choose::FirstWorking),
             &adapters,
             &originals,
+            None,
             &mut |line| said.push(line.to_string()),
         );
 
-        assert_eq!(outcome, Outcome::Encrypted { provider: "Cloudflare".into(), skipped: vec![] });
+        assert_eq!(outcome, Outcome::Encrypted { method: Method::Doh, provider: "Cloudflare".into(), skipped: vec![] });
         assert!(store.log.borrow().is_empty(), "google must never be written");
         assert!(said.iter().any(|line| line == "Trying Cloudflare (encrypted DNS)..."), "{said:?}");
     }
@@ -453,7 +633,7 @@ mod tests {
 
         assert_eq!(
             outcome,
-            Outcome::Encrypted { provider: "Google".into(), skipped: names(&["Cloudflare"]) }
+            Outcome::Encrypted { method: Method::Doh, provider: "Google".into(), skipped: names(&["Cloudflare"]) }
         );
         assert_eq!(store.read(dns_setting(), Some(A)), provider_state("google"));
         assert_eq!(store.read(dns_setting(), Some(B)), provider_state("google"));
@@ -503,7 +683,7 @@ mod tests {
             &originals,
         );
 
-        assert_eq!(outcome, Outcome::Encrypted { provider: "Google".into(), skipped: vec![] });
+        assert_eq!(outcome, Outcome::Encrypted { method: Method::Doh, provider: "Google".into(), skipped: vec![] });
         assert_eq!(store.read(dns_setting(), Some(A)), provider_state("google"));
         assert_eq!(store.read(dns_setting(), Some(B)), provider_state("google"));
     }
@@ -526,7 +706,7 @@ mod tests {
             &originals,
         );
 
-        assert_eq!(outcome, Outcome::Encrypted { provider: "Cloudflare".into(), skipped: vec![] });
+        assert_eq!(outcome, Outcome::Encrypted { method: Method::Doh, provider: "Cloudflare".into(), skipped: vec![] });
         assert_eq!(store.read(dns_setting(), Some(A)), provider_state("cloudflare"));
         assert_eq!(store.read(dns_setting(), Some(B)), provider_state("cloudflare"));
     }
@@ -547,7 +727,7 @@ mod tests {
 
         assert_eq!(
             outcome,
-            Outcome::Encrypted { provider: "Google".into(), skipped: names(&["Cloudflare"]) }
+            Outcome::Encrypted { method: Method::Doh, provider: "Google".into(), skipped: names(&["Cloudflare"]) }
         );
         assert_eq!(store.read(dns_setting(), Some(A)), provider_state("google"));
     }
@@ -656,7 +836,7 @@ mod tests {
 
     #[test]
     fn the_ipv6_note_goes_with_encrypted_outcomes_only() {
-        let on = Outcome::Encrypted { provider: "Cloudflare".into(), skipped: vec![] };
+        let on = Outcome::Encrypted { method: Method::Doh, provider: "Cloudflare".into(), skipped: vec![] };
         let note = ipv6_note(&on).expect("a note after success");
         assert!(note.contains("IPv6"), "{note}");
         assert_eq!(ipv6_note(&Outcome::FellBack { tried: vec![], internet_ok: true }), None);
@@ -673,6 +853,7 @@ mod tests {
     #[test]
     fn messages_match_the_design_table() {
         let encrypted = |provider: &str, skipped: &[&str]| Outcome::Encrypted {
+            method: Method::Doh,
             provider: provider.into(),
             skipped: names(skipped),
         };
@@ -704,7 +885,7 @@ mod tests {
         assert!(error.contains(REPORT_URL));
 
         let others = [
-            message(&Outcome::Encrypted { provider: "Google".into(), skipped: names(&["Cloudflare"]) }),
+            message(&Outcome::Encrypted { method: Method::Doh, provider: "Google".into(), skipped: names(&["Cloudflare"]) }),
             message(&Outcome::FellBack { tried: names(&["Cloudflare", "Google"]), internet_ok: true }),
             precheck_message(&Precheck::NoInternet).unwrap(),
             precheck_message(&Precheck::Unsupported).unwrap(),
@@ -712,5 +893,394 @@ mod tests {
         for text in others {
             assert!(!text.contains(REPORT_URL), "{text}");
         }
+    }
+
+    // ---- DoT (experimental) ----
+
+    #[derive(Default)]
+    struct FakeDot {
+        entries: RefCell<HashMap<String, dot::EntryValues>>,
+        /// Servers whose DoT entry makes resolving work.
+        works: Vec<&'static str>,
+        log: RefCell<Vec<String>>,
+        fail_add: bool,
+        restore_does_nothing: bool,
+        /// Looked at (and removed) on every add, to see when the sidecar appears.
+        sidecar: Option<std::path::PathBuf>,
+        first_add_sidecar: RefCell<Option<Result<dot::Saved, String>>>,
+    }
+
+    impl dot::DotBackend for FakeDot {
+        fn read(&self, address: &str) -> Result<Option<dot::EntryValues>, String> {
+            Ok(self.entries.borrow().get(address).cloned())
+        }
+        fn add(&self, address: &str, host: &str) -> Result<(), String> {
+            self.log.borrow_mut().push(format!("add {address}"));
+            if let Some(path) = &self.sidecar {
+                if self.first_add_sidecar.borrow().is_none() {
+                    *self.first_add_sidecar.borrow_mut() = Some(dot::load(path));
+                }
+                let _ = std::fs::remove_file(path);
+            }
+            if self.fail_add {
+                return Err("netsh failed (simulated)".to_string());
+            }
+            self.entries
+                .borrow_mut()
+                .insert(address.to_string(), vec![("DotHost".to_string(), format!("REG_SZ:{host}:853"))]);
+            Ok(())
+        }
+        fn restore(&self, address: &str, saved: &Option<dot::EntryValues>) -> Result<(), String> {
+            self.log.borrow_mut().push(format!("restore {address}"));
+            if self.restore_does_nothing {
+                return Ok(());
+            }
+            match saved {
+                Some(values) => self.entries.borrow_mut().insert(address.to_string(), values.clone()),
+                None => self.entries.borrow_mut().remove(address),
+            };
+            Ok(())
+        }
+    }
+
+    fn old_entry() -> dot::EntryValues {
+        vec![("Template".to_string(), "REG_SZ:https://old".to_string())]
+    }
+
+    fn dot_state(id: &str) -> State {
+        let servers = provider::find(id).unwrap().servers;
+        State::Value(Value::Dns(
+            servers.iter().map(|a| DnsServer { address: a.to_string(), doh: None }).collect(),
+        ))
+    }
+
+    fn backup_path(name: &str) -> std::path::PathBuf {
+        let dir = crate::settings::backup::testing::temp_dir(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("b.json")
+    }
+
+    fn resolver_with_dot<'a>(
+        store: &'a FakeStore,
+        dot: &'a FakeDot,
+        works_for: &[&'static str],
+    ) -> FakeResolver<'a> {
+        FakeResolver { dot: Some(dot), ..FakeResolver::working(store, works_for) }
+    }
+
+    fn run_dot(
+        store: &FakeStore,
+        resolver: &dyn Resolver,
+        spec: &DnsSpec,
+        adapters: &[String],
+        originals: &[(String, State)],
+        backend: &FakeDot,
+        backup: &std::path::Path,
+    ) -> Outcome {
+        run(store, resolver, spec, adapters, originals, Some((backend, backup)), &mut |_| {})
+    }
+
+    #[test]
+    fn dot_is_tried_after_doh_fails_for_the_same_provider() {
+        let store = FakeStore::default();
+        let (adapters, originals) = engine_wrote_first(&store, "cloudflare", [State::NotSet, State::NotSet]);
+        let backend = FakeDot { works: vec!["1.1.1.1"], ..Default::default() };
+        let resolver = resolver_with_dot(&store, &backend, &[]);
+
+        let outcome = run_dot(
+            &store,
+            &resolver,
+            &spec(&["cloudflare", "google"], Choose::FirstWorking),
+            &adapters,
+            &originals,
+            &backend,
+            &backup_path("dot-same-provider"),
+        );
+
+        assert_eq!(
+            outcome,
+            Outcome::Encrypted {
+                provider: "Cloudflare".into(),
+                method: Method::Dot,
+                skipped: names(&["Cloudflare (DoH)"])
+            }
+        );
+        assert_eq!(store.read(dns_setting(), Some(A)), dot_state("cloudflare"));
+        assert_eq!(store.read(dns_setting(), Some(B)), dot_state("cloudflare"));
+        assert_eq!(*backend.log.borrow(), ["add 1.1.1.1", "add 1.0.0.1"]);
+    }
+
+    #[test]
+    fn first_working_stops_at_dot_success_and_names_the_method() {
+        let store = FakeStore::default();
+        let (adapters, originals) = engine_wrote_first(&store, "cloudflare", [State::NotSet, State::NotSet]);
+        let backend = FakeDot { works: vec!["8.8.8.8"], ..Default::default() };
+        let resolver = resolver_with_dot(&store, &backend, &[]);
+
+        let outcome = run_dot(
+            &store,
+            &resolver,
+            &spec(&["cloudflare", "google", "quad9"], Choose::FirstWorking),
+            &adapters,
+            &originals,
+            &backend,
+            &backup_path("dot-stops"),
+        );
+
+        assert_eq!(
+            outcome,
+            Outcome::Encrypted {
+                provider: "Google".into(),
+                method: Method::Dot,
+                skipped: names(&["Cloudflare (DoH)", "Cloudflare (DoT)", "Google (DoH)"])
+            }
+        );
+        let log = backend.log.borrow();
+        assert!(!log.iter().any(|line| line.contains("9.9.9.9")), "{log:?}");
+        assert!(backend.entries.borrow().contains_key("8.8.8.8"));
+        assert!(!backend.entries.borrow().contains_key("1.1.1.1"));
+    }
+
+    #[test]
+    fn a_failing_dot_entry_is_restored_before_the_next_provider() {
+        let store = FakeStore::default();
+        let (adapters, originals) = engine_wrote_first(&store, "cloudflare", [State::NotSet, State::NotSet]);
+        let backend = FakeDot::default();
+        backend.entries.borrow_mut().insert("1.1.1.1".to_string(), old_entry());
+        let resolver = resolver_with_dot(&store, &backend, &["8.8.8.8"]);
+
+        let outcome = run_dot(
+            &store,
+            &resolver,
+            &spec(&["cloudflare", "google"], Choose::FirstWorking),
+            &adapters,
+            &originals,
+            &backend,
+            &backup_path("dot-restored-before-next"),
+        );
+
+        assert_eq!(
+            outcome,
+            Outcome::Encrypted {
+                provider: "Google".into(),
+                method: Method::Doh,
+                skipped: names(&["Cloudflare (DoH)", "Cloudflare (DoT)"])
+            }
+        );
+        assert_eq!(
+            *backend.log.borrow(),
+            ["add 1.1.1.1", "add 1.0.0.1", "restore 1.1.1.1", "restore 1.0.0.1"]
+        );
+        assert_eq!(backend.entries.borrow().get("1.1.1.1"), Some(&old_entry()));
+        assert!(!backend.entries.borrow().contains_key("1.0.0.1"));
+    }
+
+    #[test]
+    fn fallback_restores_adapters_and_dot_entries() {
+        let store = FakeStore::default();
+        let (adapters, originals) =
+            engine_wrote_first(&store, "cloudflare", [State::NotSet, static_dns("9.9.9.9")]);
+        let backend = FakeDot::default();
+        backend.entries.borrow_mut().insert("1.1.1.1".to_string(), old_entry());
+        // Only plain DHCP DNS ("") resolves.
+        let resolver = resolver_with_dot(&store, &backend, &[""]);
+
+        let outcome = run_dot(
+            &store,
+            &resolver,
+            &spec(&["cloudflare"], Choose::FirstWorking),
+            &adapters,
+            &originals,
+            &backend,
+            &backup_path("dot-fallback"),
+        );
+
+        assert_eq!(
+            outcome,
+            Outcome::FellBack { tried: names(&["Cloudflare (DoH)", "Cloudflare (DoT)"]), internet_ok: true }
+        );
+        assert_eq!(store.read(dns_setting(), Some(A)), State::NotSet);
+        assert_eq!(store.read(dns_setting(), Some(B)), static_dns("9.9.9.9"));
+        assert_eq!(backend.entries.borrow().get("1.1.1.1"), Some(&old_entry()));
+        assert!(!backend.entries.borrow().contains_key("1.0.0.1"));
+    }
+
+    #[test]
+    fn dot_write_failure_is_a_program_error_and_everything_is_restored() {
+        let store = FakeStore::default();
+        let (adapters, originals) =
+            engine_wrote_first(&store, "cloudflare", [State::NotSet, static_dns("9.9.9.9")]);
+        let backend = FakeDot { fail_add: true, ..Default::default() };
+        backend.entries.borrow_mut().insert("1.1.1.1".to_string(), old_entry());
+        let resolver = resolver_with_dot(&store, &backend, &[""]);
+
+        let outcome = run_dot(
+            &store,
+            &resolver,
+            &spec(&["cloudflare"], Choose::FirstWorking),
+            &adapters,
+            &originals,
+            &backend,
+            &backup_path("dot-write-failure"),
+        );
+
+        let Outcome::ProgramError(reason) = outcome else { panic!("expected a program error") };
+        assert!(reason.contains("simulated"), "{reason}");
+        assert_eq!(store.read(dns_setting(), Some(A)), State::NotSet);
+        assert_eq!(store.read(dns_setting(), Some(B)), static_dns("9.9.9.9"));
+        assert_eq!(backend.entries.borrow().get("1.1.1.1"), Some(&old_entry()));
+    }
+
+    #[test]
+    fn restore_mismatch_is_reported_in_the_program_error() {
+        let store = FakeStore::default();
+        let (adapters, originals) = engine_wrote_first(&store, "cloudflare", [State::NotSet, State::NotSet]);
+        let backend = FakeDot { restore_does_nothing: true, ..Default::default() };
+        let resolver = resolver_with_dot(&store, &backend, &[""]);
+
+        let outcome = run_dot(
+            &store,
+            &resolver,
+            &spec(&["cloudflare"], Choose::FirstWorking),
+            &adapters,
+            &originals,
+            &backend,
+            &backup_path("dot-restore-mismatch"),
+        );
+
+        let Outcome::ProgramError(reason) = outcome else { panic!("expected a program error") };
+        assert!(reason.contains("entry differs after restoring"), "{reason}");
+        assert_eq!(store.read(dns_setting(), Some(A)), State::NotSet);
+    }
+
+    #[test]
+    fn sidecar_is_written_once_before_the_first_dot_write() {
+        let store = FakeStore::default();
+        let (adapters, originals) = engine_wrote_first(&store, "cloudflare", [State::NotSet, State::NotSet]);
+        let path = backup_path("dot-sidecar-once");
+        let sidecar = dot::sidecar_path(&path);
+        let backend = FakeDot { sidecar: Some(sidecar.clone()), ..Default::default() };
+        backend.entries.borrow_mut().insert("8.8.8.8".to_string(), old_entry());
+        let resolver = resolver_with_dot(&store, &backend, &[""]);
+
+        run_dot(
+            &store,
+            &resolver,
+            &spec(&["cloudflare", "google"], Choose::FirstWorking),
+            &adapters,
+            &originals,
+            &backend,
+            &path,
+        );
+
+        let saved = backend.first_add_sidecar.borrow().clone().expect("an add happened").expect("sidecar existed");
+        let address = |entry: &dot::SavedEntry| entry.address.clone();
+        assert_eq!(
+            saved.entries.iter().map(address).collect::<Vec<_>>(),
+            names(&["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4"])
+        );
+        assert_eq!(saved.entries[2].values, Some(old_entry()));
+        // The fake deletes the file on every add; it must not have been written again.
+        assert!(!sidecar.exists());
+    }
+
+    #[test]
+    fn fastest_tries_dot_only_for_providers_whose_doh_failed() {
+        let store = FakeStore::default();
+        let (adapters, originals) = engine_wrote_first(&store, "cloudflare", [State::NotSet, State::NotSet]);
+        let backend = FakeDot { works: vec!["8.8.8.8"], ..Default::default() };
+        let resolver = FakeResolver {
+            durations: vec![("1.1.1.1", 30), ("8.8.8.8", 10)],
+            ..resolver_with_dot(&store, &backend, &["1.1.1.1"])
+        };
+
+        let outcome = run_dot(
+            &store,
+            &resolver,
+            &spec(&["cloudflare", "google"], Choose::Fastest),
+            &adapters,
+            &originals,
+            &backend,
+            &backup_path("dot-fastest"),
+        );
+
+        assert_eq!(
+            outcome,
+            Outcome::Encrypted {
+                provider: "Google".into(),
+                method: Method::Dot,
+                skipped: names(&["Google (DoH)"])
+            }
+        );
+        assert_eq!(*backend.log.borrow(), ["add 8.8.8.8", "add 8.8.4.4"]);
+        assert_eq!(store.read(dns_setting(), Some(A)), dot_state("google"));
+    }
+
+    #[test]
+    fn fastest_gives_up_a_dot_entry_when_a_doh_provider_is_faster() {
+        let store = FakeStore::default();
+        let (adapters, originals) = engine_wrote_first(&store, "google", [State::NotSet, State::NotSet]);
+        let backend = FakeDot { works: vec!["8.8.8.8"], ..Default::default() };
+        let resolver = FakeResolver {
+            durations: vec![("1.1.1.1", 10), ("8.8.8.8", 30)],
+            ..resolver_with_dot(&store, &backend, &["1.1.1.1"])
+        };
+
+        let outcome = run_dot(
+            &store,
+            &resolver,
+            &spec(&["google", "cloudflare"], Choose::Fastest),
+            &adapters,
+            &originals,
+            &backend,
+            &backup_path("dot-fastest-doh-wins"),
+        );
+
+        assert_eq!(
+            outcome,
+            Outcome::Encrypted {
+                provider: "Cloudflare".into(),
+                method: Method::Doh,
+                skipped: names(&["Google (DoH)"])
+            }
+        );
+        assert!(!backend.entries.borrow().contains_key("8.8.8.8"));
+        assert_eq!(store.read(dns_setting(), Some(A)), provider_state("cloudflare"));
+    }
+
+    #[test]
+    fn without_a_dot_backend_nothing_changes() {
+        let store = FakeStore::default();
+        let (adapters, originals) = engine_wrote_first(&store, "cloudflare", [State::NotSet, State::NotSet]);
+        let resolver = FakeResolver::working(&store, &[""]);
+
+        let outcome = run_quietly(
+            &store,
+            &resolver,
+            &spec(&["cloudflare"], Choose::FirstWorking),
+            &adapters,
+            &originals,
+        );
+
+        assert_eq!(outcome, Outcome::FellBack { tried: names(&["Cloudflare"]), internet_ok: true });
+        assert_eq!(store.read(dns_setting(), Some(A)), State::NotSet);
+    }
+
+    #[test]
+    fn dot_messages_name_the_method_and_the_skips() {
+        let dot_on = |skipped: &[&str]| Outcome::Encrypted {
+            provider: "Cloudflare".into(),
+            method: Method::Dot,
+            skipped: names(skipped),
+        };
+        assert_eq!(message(&dot_on(&[])), "Encrypted DNS is on: Cloudflare (DoT, experimental).");
+        assert_eq!(
+            message(&dot_on(&["Cloudflare (DoH)"])),
+            "Cloudflare (DoH) did not work on this network; using Cloudflare (DoT) instead.\nEncrypted DNS is on: Cloudflare (DoT, experimental)."
+        );
+        assert_eq!(
+            message(&dot_on(&["Cloudflare (DoH)", "Google (DoH)"])),
+            "Cloudflare (DoH), Google (DoH) did not work on this network; using Cloudflare (DoT) instead.\nEncrypted DNS is on: Cloudflare (DoT, experimental)."
+        );
     }
 }

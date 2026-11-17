@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 
 use crate::adapters;
 use crate::dns::Resolver;
+use crate::dns::dot::{DotBackend, SystemDotBackend};
 use crate::dns::resolver::SystemResolver;
 use crate::elevation;
 use crate::settings::backup;
@@ -45,6 +46,10 @@ impl Env for SystemEnv {
 
     fn resolver(&self) -> &dyn Resolver {
         &self.resolver
+    }
+
+    fn dot_backend(&self) -> &dyn DotBackend {
+        &SystemDotBackend
     }
 
     fn adapters(&self) -> Vec<EnvAdapter> {

@@ -167,7 +167,6 @@ pub fn subkeys(hive: HKEY, key: &str) -> RegResult<Vec<String>> {
 
 /// Every value of a key as `(name, "<type>:<data>")`, sorted by name. Binary
 /// data is hex. A key that does not exist has none.
-#[allow(dead_code)] // wired by the DoT chain (plan task 3)
 pub fn values(hive: HKEY, key: &str) -> RegResult<Vec<(String, String)>> {
     unsafe {
         let mut handle = HKEY::default();
