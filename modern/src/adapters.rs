@@ -2,7 +2,8 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use windows::Win32::NetworkManagement::IpHelper::{
     GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
-    GetAdaptersAddresses, GetIfEntry2, IP_ADAPTER_ADDRESSES_LH, MIB_IF_ROW2,
+    GetAdaptersAddresses, GetIfEntry2, IP_ADAPTER_ADDRESSES_LH, IP_ADAPTER_DHCP_ENABLED,
+    IP_ADAPTER_IPV6_ENABLED, MIB_IF_ROW2,
 };
 use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
 use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6, SOCKADDR, SOCKADDR_IN, SOCKADDR_IN6};
@@ -32,6 +33,13 @@ pub struct NetworkAdapter {
     /// Ethernet or Wi-Fi: the adapters a profile's per-adapter settings are
     /// applied to. Tunnels and other virtual types are left alone.
     pub takes_profile_settings: bool,
+    /// Backed by real hardware (not a tunnel, VPN or virtual adapter).
+    pub is_hardware: bool,
+    /// Link speed in megabits per second, when Windows reports one.
+    pub link_mbps: Option<u64>,
+    pub mtu: u32,
+    pub dhcp4: bool,
+    pub ipv6_enabled: bool,
 }
 
 /// Lists the system's network adapters via `GetAdaptersAddresses`.
@@ -91,6 +99,10 @@ pub fn get_network_adapters() -> Result<Vec<NetworkAdapter>, u32> {
             .collect::<Vec<_>>()
             .join("-");
 
+        let is_hardware = is_hardware_interface(info);
+        let flags = unsafe { info.Anonymous2.Flags };
+        let speed = info.TransmitLinkSpeed;
+
         adapters.push(NetworkAdapter {
             friendly_name: unsafe { wide_to_string(info.FriendlyName) },
             guid: unsafe { ansi_to_string(info.AdapterName) },
@@ -100,7 +112,12 @@ pub fn get_network_adapters() -> Result<Vec<NetworkAdapter>, u32> {
             adapter_type: adapter_type_name(info.IfType),
             is_up: info.OperStatus == IfOperStatusUp,
             is_loopback: info.IfType == IF_TYPE_LOOPBACK,
-            takes_profile_settings: takes_profile_settings(info.IfType, is_hardware_interface(info)),
+            takes_profile_settings: takes_profile_settings(info.IfType, is_hardware),
+            is_hardware,
+            link_mbps: (speed != 0 && speed != u64::MAX).then(|| speed / 1_000_000),
+            mtu: info.Mtu,
+            dhcp4: flags & IP_ADAPTER_DHCP_ENABLED != 0,
+            ipv6_enabled: flags & IP_ADAPTER_IPV6_ENABLED != 0,
         });
 
         current = info.Next;

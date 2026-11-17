@@ -8,7 +8,8 @@ use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
 
-use crate::settings::registry;
+use crate::adapters::NetworkAdapter;
+use crate::settings::{registry, wmi};
 use crate::version;
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -219,9 +220,95 @@ fn total_ram_mb() -> Option<u64> {
     Some(status.ullTotalPhys / (1024 * 1024))
 }
 
+
+const NET_CLASS_KEY: &str =
+    r"SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}";
+const DOH_SERVERS_KEY: &str = r"SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DohWellKnownServers";
+const SECURITY_CENTER: &str = r"ROOT\SecurityCenter2";
+
+/// The adapters, virtual adapters, registered security products and the DoH
+/// servers Windows knows. Read-only; anything unavailable is left out.
+///
+/// An adapter's own name is not copied (a person may have renamed it): it is
+/// reported as its kind and a number.
+pub fn collect_network(
+    adapters: &[NetworkAdapter],
+) -> (Vec<AdapterInfo>, Vec<VirtualAdapters>, Vec<String>, Vec<String>) {
+    let classes = driver_classes();
+    let infos = adapters
+        .iter()
+        .filter(|adapter| adapter.is_hardware && !adapter.is_loopback)
+        .enumerate()
+        .map(|(index, adapter)| AdapterInfo {
+            name: format!("{} {}", adapter.adapter_type, index + 1),
+            description: adapter.description.clone(),
+            kind: adapter.adapter_type.to_string(),
+            up: adapter.is_up,
+            link_mbps: adapter.link_mbps,
+            mtu: Some(adapter.mtu),
+            dhcp: Some(adapter.dhcp4),
+            ipv6: adapter.ipv6_enabled,
+            driver: pick_driver(&adapter.guid, &classes),
+        })
+        .collect();
+
+    let mut products: Vec<String> = ["AntiVirusProduct", "FirewallProduct"]
+        .iter()
+        .flat_map(|class| wmi::query_strings(SECURITY_CENTER, class, "displayName").unwrap_or_default())
+        .collect();
+    products.sort();
+    products.dedup();
+
+    let doh = registry::subkeys(HKEY_LOCAL_MACHINE, DOH_SERVERS_KEY).unwrap_or_default();
+    (infos, summarize_virtual(adapters), products, doh)
+}
+
+/// Virtual adapters grouped by kind. Descriptions and names are never copied:
+/// they can name an employer or a person.
+fn summarize_virtual(adapters: &[NetworkAdapter]) -> Vec<VirtualAdapters> {
+    let mut counts: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+    for adapter in adapters.iter().filter(|a| !a.is_hardware && !a.is_loopback) {
+        *counts.entry(adapter.adapter_type.to_string()).or_default() += 1;
+    }
+    counts.into_iter().map(|(kind, count)| VirtualAdapters { kind, count }).collect()
+}
+
+fn same_guid(a: &str, b: &str) -> bool {
+    a.trim_matches(['{', '}']).eq_ignore_ascii_case(b.trim_matches(['{', '}']))
+}
+
+/// The driver recorded for the adapter with this GUID.
+fn pick_driver(guid: &str, classes: &[(String, DriverInfo)]) -> Option<DriverInfo> {
+    classes.iter().find(|(id, _)| same_guid(id, guid)).map(|(_, driver)| driver.clone())
+}
+
+/// (adapter GUID, driver) for every network device class entry.
+fn driver_classes() -> Vec<(String, DriverInfo)> {
+    let text = |key: &str, value: &str| {
+        registry::read_string(HKEY_LOCAL_MACHINE, key, value).ok().flatten()
+    };
+    registry::subkeys(HKEY_LOCAL_MACHINE, NET_CLASS_KEY)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|sub| {
+            let key = format!(r"{NET_CLASS_KEY}\{sub}");
+            let id = text(&key, "NetCfgInstanceId")?;
+            Some((
+                id,
+                DriverInfo {
+                    provider: text(&key, "ProviderName").unwrap_or_default(),
+                    version: text(&key, "DriverVersion").unwrap_or_default(),
+                    date: text(&key, "DriverDate").unwrap_or_default(),
+                },
+            ))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::NetworkAdapter;
     use std::collections::BTreeSet;
 
     fn populated() -> Diagnostics {
@@ -276,6 +363,71 @@ mod tests {
             serde_json::Value::Array(items) => items.iter().for_each(|item| keys(item, into)),
             _ => {}
         }
+    }
+
+    fn adapter(kind: &'static str, hardware: bool, loopback: bool) -> NetworkAdapter {
+        NetworkAdapter {
+            friendly_name: "Secret VPN name".into(),
+            guid: "{X}".into(),
+            description: "Corp VPN Client".into(),
+            ip_addresses: vec![],
+            mac_address: "-".into(),
+            adapter_type: kind,
+            is_up: true,
+            is_loopback: loopback,
+            takes_profile_settings: hardware,
+            link_mbps: None,
+            mtu: 1500,
+            dhcp4: true,
+            ipv6_enabled: true,
+            is_hardware: hardware,
+        }
+    }
+
+    #[test]
+    fn summarize_virtual_counts_kinds_and_never_copies_descriptions() {
+        let adapters = [
+            adapter("Tunnel", false, false),
+            adapter("Tunnel", false, false),
+            adapter("Virtual", false, false),
+            adapter("Ethernet", true, false),
+            adapter("Loopback", false, true),
+        ];
+        let summary = summarize_virtual(&adapters);
+        let pairs: Vec<(&str, u32)> = summary.iter().map(|v| (v.kind.as_str(), v.count)).collect();
+        assert_eq!(pairs, [("Tunnel", 2), ("Virtual", 1)]);
+        let text = format!("{summary:?}");
+        assert!(!text.contains("Corp VPN") && !text.contains("Secret"), "{text}");
+    }
+
+    #[test]
+    fn pick_driver_matches_the_guid_ignoring_case_and_braces() {
+        let driver = |provider: &str| DriverInfo {
+            provider: provider.into(),
+            version: "1.0".into(),
+            date: "2024-01-01".into(),
+        };
+        let classes = vec![
+            ("{aaaaaaaa-885f-4a75-8f0c-84ba153614ec}".to_string(), driver("Other")),
+            ("{d7747ac7-885f-4a75-8f0c-84ba153614ec}".to_string(), driver("Realtek")),
+        ];
+        let found = pick_driver("D7747AC7-885F-4A75-8F0C-84BA153614EC", &classes).unwrap();
+        assert_eq!(found.provider, "Realtek");
+        assert!(pick_driver("{00000000-0000-0000-0000-000000000000}", &classes).is_none());
+    }
+
+    /// Read-only: runs against the machine running the tests.
+    #[test]
+    fn collect_network_reads_this_machine_without_errors() {
+        let adapters = crate::adapters::get_network_adapters().unwrap();
+        let (infos, virtuals, security, doh) = collect_network(&adapters);
+        println!("adapters: {infos:#?}
+virtual: {virtuals:?}
+security: {security:?}
+doh: {doh:?}");
+        let hardware = adapters.iter().filter(|a| a.is_hardware && !a.is_loopback).count();
+        assert_eq!(infos.len(), hardware);
+        assert!(infos.iter().all(|info| !info.description.is_empty()));
     }
 
     #[test]

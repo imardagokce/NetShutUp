@@ -7,15 +7,16 @@
 use std::ffi::c_void;
 
 use windows::Win32::System::Registry::{
-    HKEY, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ,
+    HKEY, KEY_ENUMERATE_SUB_KEYS, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ,
     REG_VALUE_TYPE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW,
-    RegDeleteKeyValueW, RegDeleteKeyW, RegGetValueW, RegOpenKeyExW, RegQueryInfoKeyW,
+    RegDeleteKeyValueW, RegDeleteKeyW, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, RegQueryInfoKeyW,
     RegSetValueExW,
 };
-use windows::core::{HSTRING, PCWSTR};
+use windows::core::{HSTRING, PCWSTR, PWSTR};
 
 const ERROR_SUCCESS: u32 = 0;
 const ERROR_FILE_NOT_FOUND: u32 = 2;
+const ERROR_NO_MORE_ITEMS: u32 = 259;
 
 pub type RegResult<T> = Result<T, u32>;
 
@@ -120,6 +121,47 @@ pub fn delete_value(hive: HKEY, key: &str, value: &str) -> RegResult<()> {
     match result.0 {
         ERROR_SUCCESS | ERROR_FILE_NOT_FOUND => Ok(()),
         code => Err(code),
+    }
+}
+
+/// The names of a key's subkeys, sorted. A key that does not exist has none.
+pub fn subkeys(hive: HKEY, key: &str) -> RegResult<Vec<String>> {
+    unsafe {
+        let mut handle = HKEY::default();
+        let opened =
+            RegOpenKeyExW(hive, &HSTRING::from(key), None, KEY_ENUMERATE_SUB_KEYS, &mut handle);
+        match opened.0 {
+            ERROR_SUCCESS => {}
+            ERROR_FILE_NOT_FOUND => return Ok(Vec::new()),
+            code => return Err(code),
+        }
+
+        let mut names = Vec::new();
+        let mut index = 0u32;
+        let outcome = loop {
+            let mut buffer = [0u16; 256];
+            let mut length = buffer.len() as u32;
+            let result = RegEnumKeyExW(
+                handle,
+                index,
+                Some(PWSTR(buffer.as_mut_ptr())),
+                &mut length,
+                None,
+                None,
+                None,
+                None,
+            );
+            match result.0 {
+                ERROR_SUCCESS => names.push(String::from_utf16_lossy(&buffer[..length as usize])),
+                ERROR_NO_MORE_ITEMS => break Ok(()),
+                code => break Err(code),
+            }
+            index += 1;
+        };
+        let _ = RegCloseKey(handle);
+        outcome?;
+        names.sort();
+        Ok(names)
     }
 }
 
@@ -239,5 +281,19 @@ mod tests {
 
         sandbox::wipe("registry-roundtrip");
         assert!(!key_exists(HKCU, &sandbox::path("registry-roundtrip")));
+    }
+
+    #[test]
+    fn subkeys_lists_children_of_a_sandbox_key() {
+        sandbox::wipe("registry-subkeys");
+        let base = sandbox::path("registry-subkeys");
+        write_string(HKCU, &format!(r"{base}\b"), "v", "1").unwrap();
+        write_string(HKCU, &format!(r"{base}\a"), "v", "1").unwrap();
+
+        assert_eq!(subkeys(HKCU, &base), Ok(vec!["a".to_string(), "b".to_string()]));
+        // A key that does not exist has no subkeys, like a missing value reads as none.
+        assert_eq!(subkeys(HKCU, &sandbox::path("registry-subkeys-missing")), Ok(vec![]));
+
+        sandbox::wipe("registry-subkeys");
     }
 }
