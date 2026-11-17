@@ -25,6 +25,7 @@ Usage:
   netshutup-modern apply <profile> --dry-run
                                       Go through apply without changing anything
   netshutup-modern revert             Undo the most recent apply
+  netshutup-modern selftest           Test every profile for real and write a report (for testers)
 
 Profiles: privacy, performance, recommended";
 
@@ -36,6 +37,7 @@ enum Command {
     Preview(String),
     Apply(String),
     Revert,
+    SelfTest,
 }
 
 /// Turns the words on the command line into a command. Without any words the
@@ -47,11 +49,13 @@ fn parse(words: &[&str], interactive: bool) -> Option<Command> {
         ["preview", profile] => Some(Command::Preview((*profile).to_string())),
         ["apply", profile] => Some(Command::Apply((*profile).to_string())),
         ["revert"] => Some(Command::Revert),
+        ["selftest"] => Some(Command::SelfTest),
         // How the menu continues in the administrator copy; not in USAGE.
         ["menu", "apply", profile] if interactive => {
             Some(Command::Menu(Some(Resume::Apply((*profile).to_string()))))
         }
         ["menu", "revert"] if interactive => Some(Command::Menu(Some(Resume::Revert))),
+        ["menu", "selftest"] if interactive => Some(Command::Menu(Some(Resume::SelfTest))),
         _ => None,
     }
 }
@@ -84,6 +88,7 @@ fn main() -> ExitCode {
         Command::Preview(profile) => commands::preview(profile),
         Command::Apply(profile) => commands::apply(profile, dry_run, elevated_copy),
         Command::Revert => commands::revert(elevated_copy),
+        Command::SelfTest => commands::selftest(elevated_copy),
     };
 
     // The menu keeps its own window usable; the commands need a moment to be read.
@@ -102,6 +107,16 @@ mod tests {
     fn no_arguments_open_the_menu_only_on_a_terminal() {
         assert_eq!(parse(&[], true), Some(Command::Menu(None)));
         assert_eq!(parse(&[], false), None);
+    }
+
+    #[test]
+    fn parse_accepts_selftest_and_its_resume_form() {
+        assert_eq!(parse(&["selftest"], false), Some(Command::SelfTest));
+        assert_eq!(
+            parse(&["menu", "selftest"], true),
+            Some(Command::Menu(Some(Resume::SelfTest)))
+        );
+        assert_eq!(parse(&["menu", "selftest"], false), None);
     }
 
     #[test]

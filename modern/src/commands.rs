@@ -19,6 +19,11 @@ use crate::settings::provider;
 use crate::settings::reader::{self, Origin};
 use crate::settings::store::{Store, SystemStore};
 use crate::terminal::{self, Terminal};
+use crate::selftest::diagnostics;
+use crate::selftest::files;
+use crate::selftest::render::render_markdown;
+use crate::selftest::runner;
+use crate::selftest::system_env::SystemEnv;
 use crate::{style, version};
 
 /// Added to the command line of the copy that is restarted as administrator.
@@ -403,6 +408,94 @@ fn restore_backup(
     ExitCode::SUCCESS
 }
 
+const SELFTEST_CONSENT: &str = "\
+Self-test (for testers)
+
+This applies each profile (Privacy, Performance, Recommended) one after another and undoes it
+again. It takes a few minutes and your internet may drop for a moment. Everything is reverted;
+the backups are kept.
+
+It also notes diagnostic information about your hardware and network environment, without
+personal identifiers. It is written only to a file on this computer; nothing is sent anywhere.";
+
+/// Runs the self-test and writes its report. Needs administrator rights.
+fn run_selftest(ask: &mut dyn FnMut(&str) -> bool) -> ExitCode {
+    println!("{SELFTEST_CONSENT}");
+    if !ask("Start the self-test?") {
+        println!("Cancelled. Nothing was changed.");
+        return ExitCode::SUCCESS;
+    }
+
+    let profiles = match profile::builtin() {
+        Ok(profiles) => profiles,
+        Err(reason) => {
+            eprintln!("Built-in profiles could not be loaded: {reason}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    println!("\nCollecting diagnostic information...");
+    let mut info = diagnostics::collect_system();
+    let (adapters, virtual_adapters, security, doh) =
+        diagnostics::collect_network(&adapters::get_network_adapters().unwrap_or_default());
+    info.adapters = adapters;
+    info.virtual_adapters = virtual_adapters;
+    info.security_products = security;
+    info.known_doh_servers = doh;
+
+    println!();
+    let report = runner::run(&SystemEnv::new(), &profiles, info, &mut |line| println!("  {line}"));
+    let markdown = render_markdown(&report);
+
+    let (pass, fail, skip, info_count) = report.counts();
+    println!(
+        "\nSelf-test finished: {pass} passed, {fail} failed, {skip} skipped, {info_count} notes."
+    );
+    if !report.all_restored {
+        eprintln!("\nNOT everything was restored. Run: netshutup-modern revert");
+    }
+
+    let mut dirs = vec![files::reports_dir()];
+    dirs.extend(files::desktop_dir());
+    let stem = format!("NetShutUp-selftest-{}", report.created);
+    match files::write_report(&report, &markdown, &dirs, &stem) {
+        Ok(paths) => {
+            println!("\nReport written:");
+            for path in &paths {
+                println!("  {}", path.display());
+            }
+            if let Some(folder) = paths.first().and_then(|path| path.parent()) {
+                files::open_folder(folder);
+            }
+            println!("Please send both files (see \"How to send this report\" inside).");
+        }
+        Err(reason) => {
+            eprintln!("\nThe report could not be written: {reason}\nHere it is instead:\n");
+            println!("{markdown}");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    if report.all_restored { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+/// `netshutup-modern selftest`: restarts as administrator when needed.
+pub fn selftest(elevated_copy: bool) -> ExitCode {
+    if !elevation::is_elevated() {
+        return continue_elevated(&["selftest"], elevated_copy);
+    }
+    run_selftest(&mut confirm)
+}
+
+/// The menu's self-test; without administrator rights it returns `Flow::NeedsAdmin` untouched.
+pub fn menu_selftest(ask: &mut dyn FnMut(&str) -> bool) -> Flow {
+    if !elevation::is_elevated() {
+        return Flow::NeedsAdmin;
+    }
+    run_selftest(ask);
+    Flow::Finished
+}
+
 /// The title of the terminal window.
 pub fn window_title(app_version: &str, elevated: bool) -> String {
     let rights = if elevated { " - Administrator" } else { "" };
@@ -425,6 +518,9 @@ fn header(app_version: &str, windows: (u32, u32, u32), elevated: bool) -> String
 pub fn menu(resume: Option<Resume>) -> ExitCode {
     let line = header(env!("CARGO_PKG_VERSION"), version::get_windows_version(), elevation::is_elevated());
     println!("{}\n", style::heading(&line));
+    if let Some(warning) = files::header_marker_line(files::unfinished_marker_exists()) {
+        println!("{}\n", style::changed(&warning));
+    }
 
     menu::run(&mut Terminal, &mut RealActions, resume);
     ExitCode::SUCCESS
@@ -459,6 +555,10 @@ impl Actions for RealActions {
 
     fn revert(&mut self) -> Flow {
         menu_revert(&mut terminal::confirm)
+    }
+
+    fn selftest(&mut self) -> Flow {
+        menu_selftest(&mut terminal::confirm)
     }
 
     fn hand_over(&mut self, resume: &Resume) -> Start {

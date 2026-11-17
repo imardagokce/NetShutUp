@@ -24,7 +24,6 @@ use super::{Check, Cycle, Report, Status};
 
 pub struct EnvAdapter {
     pub guid: String,
-    pub name: String,
 }
 
 pub trait Env {
@@ -619,10 +618,7 @@ mod tests {
             &self.resolver
         }
         fn adapters(&self) -> Vec<EnvAdapter> {
-            self.adapters
-                .iter()
-                .map(|a| EnvAdapter { guid: a.guid.clone(), name: a.name.clone() })
-                .collect()
+            self.adapters.iter().map(|a| EnvAdapter { guid: a.guid.clone() }).collect()
         }
         fn windows_build(&self) -> u32 {
             26200
@@ -654,7 +650,7 @@ mod tests {
             store,
             adapters: adapters
                 .iter()
-                .map(|guid| EnvAdapter { guid: guid.to_string(), name: "Test".to_string() })
+                .map(|guid| EnvAdapter { guid: guid.to_string() })
                 .collect(),
             elevated: true,
             dir: temp_dir(name),
@@ -831,8 +827,8 @@ mod tests {
     fn snapshot_covers_every_catalog_setting_per_adapter() {
         let store = FakeStore::default();
         let adapters = [
-            EnvAdapter { guid: A.into(), name: "x".into() },
-            EnvAdapter { guid: B.into(), name: "y".into() },
+            EnvAdapter { guid: A.into() },
+            EnvAdapter { guid: B.into() },
         ];
         let taken = snapshot(&store, &adapters);
         let system = CATALOG.iter().filter(|s| s.scope == catalog::Scope::System).count();

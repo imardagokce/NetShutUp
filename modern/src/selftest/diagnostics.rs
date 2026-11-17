@@ -82,7 +82,8 @@ pub struct PolicyValue {
     pub value: String,
 }
 
-/// Every key the JSON of `Diagnostics` may contain.
+/// Every key the JSON of `Diagnostics` may contain. A test holds the struct to it.
+#[cfg(test)]
 pub const ALLOWED_KEYS: &[&str] = &[
     "program", "windows", "locale", "utc_offset_minutes", "cpu", "logical_cores", "ram_mb",
     "machine", "adapters", "virtual_adapters", "domain_joined", "policies", "security_products",

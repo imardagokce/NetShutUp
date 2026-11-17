@@ -24,6 +24,7 @@ pub trait Ui {
 pub enum Resume {
     Apply(String),
     Revert,
+    SelfTest,
 }
 
 impl Resume {
@@ -32,6 +33,7 @@ impl Resume {
         match self {
             Resume::Apply(id) => vec!["menu".to_string(), "apply".to_string(), id.clone()],
             Resume::Revert => vec!["menu".to_string(), "revert".to_string()],
+            Resume::SelfTest => vec!["menu".to_string(), "selftest".to_string()],
         }
     }
 }
@@ -46,6 +48,7 @@ pub trait Actions {
     fn scan(&mut self);
     fn apply(&mut self, profile_id: &str) -> Flow;
     fn revert(&mut self) -> Flow;
+    fn selftest(&mut self) -> Flow;
     /// Starts the administrator copy at `resume`.
     fn hand_over(&mut self, resume: &Resume) -> Start;
 }
@@ -60,13 +63,20 @@ pub fn run(ui: &mut dyn Ui, actions: &mut dyn Actions, resume: Option<Resume>) {
         let flow = match &resume {
             Resume::Apply(id) => actions.apply(id),
             Resume::Revert => actions.revert(),
+            Resume::SelfTest => actions.selftest(),
         };
         if flow == Flow::NeedsAdmin {
             ui.say(NO_ADMIN_RIGHTS);
         }
     }
 
-    let main_options: Vec<String> = ["Scan current settings", "Apply a profile", "Revert last change", "Exit"]
+    let main_options: Vec<String> = [
+        "Scan current settings",
+        "Apply a profile",
+        "Revert last change",
+        "Self-test (for testers)",
+        "Exit",
+    ]
         .map(String::from)
         .to_vec();
 
@@ -82,6 +92,7 @@ pub fn run(ui: &mut dyn Ui, actions: &mut dyn Actions, resume: Option<Resume>) {
                 ProfileAnswer::Quit => return,
             },
             Answer::Picked(2) => (actions.revert(), Resume::Revert),
+            Answer::Picked(3) => (actions.selftest(), Resume::SelfTest),
             Answer::Picked(_) | Answer::Back | Answer::Quit => return,
         };
 
@@ -231,6 +242,11 @@ mod tests {
             self.flow
         }
 
+        fn selftest(&mut self) -> Flow {
+            self.calls.push("selftest".to_string());
+            self.flow
+        }
+
         fn hand_over(&mut self, resume: &Resume) -> Start {
             self.calls.push(format!("hand_over {}", resume.args().join(" ")));
             (self.start)()
@@ -241,7 +257,33 @@ mod tests {
     const SCAN: usize = 0;
     const APPLY: usize = 1;
     const REVERT: usize = 2;
-    const EXIT: usize = 3;
+    const SELFTEST: usize = 3;
+    const EXIT: usize = 4;
+
+    #[test]
+    fn menu_offers_selftest_before_exit() {
+        let mut ui = FakeUi::new(vec![Answer::Picked(SELFTEST), Answer::Picked(EXIT)]);
+        let mut actions = FakeActions::new();
+        run(&mut ui, &mut actions, None);
+        assert_eq!(actions.calls, ["selftest"]);
+        assert_eq!(ui.asked(MAIN), 2);
+    }
+
+    #[test]
+    fn selftest_needing_admin_hands_over_with_the_selftest_resume() {
+        let mut ui = FakeUi::new(vec![Answer::Picked(SELFTEST)]);
+        let mut actions = FakeActions::needing_admin(|| Start::Started);
+        run(&mut ui, &mut actions, None);
+        assert_eq!(actions.calls, ["selftest", "hand_over menu selftest"]);
+    }
+
+    #[test]
+    fn resume_selftest_runs_it_first() {
+        let mut ui = FakeUi::new(vec![Answer::Picked(EXIT)]);
+        let mut actions = FakeActions::new();
+        run(&mut ui, &mut actions, Some(Resume::SelfTest));
+        assert_eq!(actions.calls, ["selftest"]);
+    }
 
     #[test]
     fn exit_choice_ends_without_doing_anything() {

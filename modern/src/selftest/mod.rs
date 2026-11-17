@@ -5,9 +5,11 @@
 use serde::Serialize;
 
 pub mod diagnostics;
+pub mod files;
 pub mod mask;
 pub mod render;
 pub mod runner;
+pub mod system_env;
 
 use diagnostics::Diagnostics;
 
