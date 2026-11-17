@@ -337,6 +337,12 @@ fn restore_backup(
     ExitCode::SUCCESS
 }
 
+/// The title of the terminal window.
+pub fn window_title(app_version: &str, elevated: bool) -> String {
+    let rights = if elevated { " - Administrator" } else { "" };
+    format!("NetShutUp - {app_version}{rights}")
+}
+
 /// The first line of the menu: program, Windows release, and rights.
 fn header(app_version: &str, windows: (u32, u32, u32), elevated: bool) -> String {
     let (major, minor, build) = windows;
@@ -626,6 +632,15 @@ mod tests {
     fn nothing_to_write_is_reported_without_asking_for_admin() {
         assert_eq!(route(true, false), Route::Report);
         assert_eq!(route(true, true), Route::Report);
+    }
+
+    #[test]
+    fn window_title_shows_the_version_and_admin_rights() {
+        assert_eq!(window_title("0.1.0-alpha.1", false), "NetShutUp - 0.1.0-alpha.1");
+        assert_eq!(
+            window_title("0.1.0-alpha.1", true),
+            "NetShutUp - 0.1.0-alpha.1 - Administrator"
+        );
     }
 
     #[test]

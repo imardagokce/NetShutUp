@@ -71,6 +71,11 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
+    terminal::set_title(&commands::window_title(
+        env!("CARGO_PKG_VERSION"),
+        elevation::is_elevated(),
+    ));
+
     let exit_code = match &command {
         Command::Menu(resume) => commands::menu(resume.clone()),
         Command::Scan => commands::scan(),

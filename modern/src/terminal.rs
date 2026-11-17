@@ -14,6 +14,13 @@ pub fn is_interactive() -> bool {
     stdin().is_terminal() && stdout().is_terminal()
 }
 
+/// Names the terminal window. Does nothing when output is not a terminal.
+pub fn set_title(title: &str) {
+    if stdout().is_terminal() {
+        let _ = crossterm::execute!(stdout(), crossterm::terminal::SetTitle(title));
+    }
+}
+
 pub struct Terminal;
 
 impl Ui for Terminal {
