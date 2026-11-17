@@ -12,7 +12,7 @@ use crate::settings::catalog::{self, CATALOG, Scope};
 use crate::settings::profile::{self, Profile};
 use crate::settings::reader::{self, Origin};
 use crate::settings::store::{Store, SystemStore};
-use crate::version;
+use crate::{style, version};
 
 /// Added to the command line of the copy that is restarted as administrator.
 /// That copy runs in its own window, so it waits for Enter before closing.
@@ -280,6 +280,11 @@ fn print_settings(title: &str, scope: Scope, adapter_guid: Option<&str>) {
             Origin::Changed => "(changed from default)",
             Origin::Unknown => "",
         };
+        let origin = if origin == "(changed from default)" {
+            style::changed(origin)
+        } else {
+            origin.to_string()
+        };
         println!(
             "  {:<26} {:<28} {origin}",
             setting.name,
@@ -359,19 +364,19 @@ fn print_table(header: [&str; 3], rows: &[[String; 3]]) {
         }
     }
 
-    let print_row = |cells: [&str; 3]| {
+    // Pad first, paint after, so the escape codes never disturb the columns.
+    let print_row = |cells: [&str; 3], last: String| {
         println!(
-            "  {:<name$}  {:<current$}  {}",
+            "  {:<name$}  {:<current$}  {last}",
             cells[0],
             cells[1],
-            cells[2],
             name = widths[0],
             current = widths[1]
         );
     };
-    print_row(header);
+    print_row(header, style::heading(header[2]));
     for row in rows {
-        print_row(row.each_ref().map(String::as_str));
+        print_row(row.each_ref().map(String::as_str), style::changed(&row[2]));
     }
 }
 

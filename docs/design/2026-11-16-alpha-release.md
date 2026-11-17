@@ -219,6 +219,40 @@ Risk: temel kademe düşük, sıkı kademe orta. Tüm sürümde yan etki üretme
 ihtimali en yüksek kısım madde 3'tür (paylaşım, yazıcı, cihaza yayın
 bozulabilir); bu yüzden ayrı bir aşamadır ve ayrıca sorulur.
 
+### Terminal menüsü (aşama 4)
+
+Arda 2026-11-17'de onayladı.
+
+Neden: arkadaşı `.exe`'ye çift tıklayacak; komut ezberlemeden tarama, profil
+uygulama ve geri alma yapabilmeli. Aşama 3'teki hâliyle çift tıklama taramayı
+basıp pencereyi kapatıyordu.
+
+- **Parametresiz çalıştırma menüyü açar.** Tarama `scan` komutuna taşınır;
+  `preview`, `apply`, `apply --dry-run`, `revert` komutları aynen kalır.
+  Giriş ya da çıkış bir terminal değilse (yönlendirme, betik) menü açılmaz;
+  kullanım metni basılır.
+- **Menü:** Scan current settings / Apply a profile / Revert last change /
+  Exit. Üstte sürüm, Windows build'i ve yetki durumu yazar. Her işlemden
+  sonra ana menüye dönülür.
+- **Ayrı "dry-run" maddesi yok.** Profil seçilince önizleme her zaman
+  gösterilir; onay sorusunun varsayılanı "Hayır"dır.
+- **Yetki.** Apply ya da Revert seçildiğinde program yönetici değilse UAC bir
+  kez sorulur; menü yönetici penceresinde seçilen adımdan devam eder ve eski
+  pencere kapanır. Önizleme iki kez gösterilmez. İzin verilmezse eski
+  pencerede ana menüye dönülür. Komut satırındaki `apply` / `revert` eski
+  akışını korur (ikinci pencere işi yapar, ilki bekler).
+- **Renk.** Varsayılandan farklı ve değişecek değerler vurgulanır. Çıktı bir
+  terminal değilse ya da `NO_COLOR` ayarlıysa renk kodu basılmaz.
+- **Tuşlar.** Esc bir adım geri gider (ana menüde çıkar), Ctrl+C çıkar.
+
+Değerlendirilip elenenler: menüde de "ikinci pencere işi yapar" akışını
+korumak (daha az iş, ama iki pencere arasında gidip gelinir, önizleme iki kez
+görünür); programı baştan yönetici olarak açmak (yukarıda reddedildi).
+
+Kütüphaneler: `inquire` 0.9.5 (ok tuşlu seçim ve onay) ve `crossterm` 0.29
+(renk). Menü akışı, tuş okumadan bağımsız saf mantık olarak yazılır ve
+testleri öyle yapılır; gerçek tuş okuyan katman ince tutulur.
+
 ### Geliştirme sırasında güvenlik
 
 - Yazma ve geri alma kodu, programın kendi oluşturduğu zararsız bir deneme

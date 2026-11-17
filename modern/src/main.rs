@@ -2,6 +2,7 @@ mod adapters;
 mod commands;
 mod elevation;
 mod settings;
+mod style;
 mod version;
 
 use std::process::ExitCode;
