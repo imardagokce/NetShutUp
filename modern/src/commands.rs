@@ -6,13 +6,15 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::adapters::{self, NetworkAdapter};
-use crate::elevation::{self, Relaunch};
+use crate::elevation::{self, Relaunch, Start};
+use crate::menu::{self, Actions, ProfileChoice, Resume};
 use crate::settings::apply::{self, ApplyError, PlannedChange};
 use crate::settings::backup::{self, Backup};
 use crate::settings::catalog::{self, CATALOG, Scope};
 use crate::settings::profile::{self, Profile};
 use crate::settings::reader::{self, Origin};
 use crate::settings::store::{Store, SystemStore};
+use crate::terminal::{self, Terminal};
 use crate::{style, version};
 
 /// Added to the command line of the copy that is restarted as administrator.
@@ -335,6 +337,66 @@ fn restore_backup(
     ExitCode::SUCCESS
 }
 
+/// The first line of the menu: program, Windows release, and rights.
+fn header(app_version: &str, windows: (u32, u32, u32), elevated: bool) -> String {
+    let (major, minor, build) = windows;
+    let release = match (major, build) {
+        (10, 22000..) => "Windows 11".to_string(),
+        (10, _) => "Windows 10".to_string(),
+        _ => format!("Windows {major}.{minor}"),
+    };
+    let rights = if elevated { "administrator" } else { "not elevated" };
+    format!("NetShutUp {app_version} · {release} (build {build}) · {rights}")
+}
+
+/// The interactive menu. `resume` is set in the administrator copy.
+pub fn menu(resume: Option<Resume>) -> ExitCode {
+    let line = header(env!("CARGO_PKG_VERSION"), version::get_windows_version(), elevation::is_elevated());
+    println!("{}\n", style::heading(&line));
+
+    menu::run(&mut Terminal, &mut RealActions, resume);
+    ExitCode::SUCCESS
+}
+
+struct RealActions;
+
+impl Actions for RealActions {
+    fn profiles(&self) -> Vec<ProfileChoice> {
+        match profile::builtin() {
+            Ok(profiles) => profiles
+                .into_iter()
+                .map(|profile| ProfileChoice {
+                    label: format!("{:<12} {}", profile.name, profile.description),
+                    id: profile.id,
+                })
+                .collect(),
+            Err(reason) => {
+                eprintln!("Built-in profiles could not be loaded: {reason}");
+                Vec::new()
+            }
+        }
+    }
+
+    fn scan(&mut self) {
+        scan();
+    }
+
+    fn apply(&mut self, profile_id: &str) -> Flow {
+        menu_apply(profile_id, &mut terminal::confirm)
+    }
+
+    fn revert(&mut self) -> Flow {
+        menu_revert(&mut terminal::confirm)
+    }
+
+    fn hand_over(&mut self, resume: &Resume) -> Start {
+        let mut args = resume.args();
+        args.push(ELEVATED_FLAG.to_string());
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        elevation::start_elevated(&args)
+    }
+}
+
 /// Keeps the window of the administrator copy open until the user has read it.
 pub fn wait_for_enter() {
     print!("\nPress Enter to close this window.");
@@ -564,6 +626,18 @@ mod tests {
     fn nothing_to_write_is_reported_without_asking_for_admin() {
         assert_eq!(route(true, false), Route::Report);
         assert_eq!(route(true, true), Route::Report);
+    }
+
+    #[test]
+    fn header_names_the_windows_release_and_rights() {
+        assert_eq!(
+            header("0.1.0", (10, 0, 26200), false),
+            "NetShutUp 0.1.0 · Windows 11 (build 26200) · not elevated"
+        );
+        assert_eq!(
+            header("0.1.0", (10, 0, 19045), true),
+            "NetShutUp 0.1.0 · Windows 10 (build 19045) · administrator"
+        );
     }
 
     #[test]
