@@ -57,8 +57,9 @@ pub fn precheck(resolver: &dyn Resolver, windows_build: u32) -> Precheck {
 pub enum Outcome {
     /// Encrypted DNS works. `skipped` are the providers that did not, by name.
     Encrypted { provider: String, skipped: Vec<String> },
-    /// None worked; DNS is back as it was.
-    FellBack { tried: Vec<String> },
+    /// None worked; DNS is back as it was. `internet_ok` is whether DNS
+    /// resolves again after putting it back.
+    FellBack { tried: Vec<String>, internet_ok: bool },
     /// NetShutUp itself failed; DNS was put back where possible.
     ProgramError(String),
 }
@@ -124,7 +125,10 @@ pub fn run(
 
     let tried = providers.iter().map(|provider| provider.name.to_string()).collect();
     match restore(store, resolver, setting, originals) {
-        Ok(()) => Outcome::FellBack { tried },
+        Ok(()) => {
+            let internet_ok = TEST_NAMES.iter().any(|name| resolver.lookup(name).is_ok());
+            Outcome::FellBack { tried, internet_ok }
+        }
         Err(reason) => Outcome::ProgramError(reason),
     }
 }
@@ -227,6 +231,17 @@ pub fn precheck_message(precheck: &Precheck) -> Option<String> {
     }
 }
 
+/// Shown after a successful trial. The trial asks the Windows DNS client, which
+/// may also use IPv6 DNS servers from the router; those are not changed.
+pub fn ipv6_note(outcome: &Outcome) -> Option<&'static str> {
+    match outcome {
+        Outcome::Encrypted { .. } => Some(
+            "Note: DNS servers that your router hands out over IPv6 are not changed and may still be used without encryption.",
+        ),
+        _ => None,
+    }
+}
+
 /// What to tell the user about the trial. Only a program error asks for a
 /// report; a network that blocks encrypted DNS is not a bug.
 pub fn message(outcome: &Outcome) -> String {
@@ -238,7 +253,10 @@ pub fn message(outcome: &Outcome) -> String {
             "{} did not work on this network; using {provider} instead.\nEncrypted DNS is on: {provider} (DoH).",
             skipped.join(", ")
         ),
-        Outcome::FellBack { .. } => "Encrypted DNS did not work on this network, so your DNS was put back as it was. Nothing is broken.".to_string(),
+        Outcome::FellBack { internet_ok: true, .. } => "Encrypted DNS did not work on this network, so your DNS was put back as it was. Nothing is broken.".to_string(),
+        Outcome::FellBack { internet_ok: false, .. } => format!(
+            "Encrypted DNS did not work on this network, and your DNS was put back as it was, but the internet does not seem to work right now.\nIf it stays that way, please check your connection. If you think it is a problem in NetShutUp, report it privately: {REPORT_URL}"
+        ),
         Outcome::ProgramError(reason) => format!(
             "DNS problem: {reason}\nThis looks like a problem in NetShutUp. Please report it privately: {REPORT_URL}"
         ),
@@ -333,6 +351,8 @@ mod tests {
             }
             let first = match self.store.read(dns_setting(), Some(A)) {
                 State::Value(Value::Dns(servers)) => servers[0].address.clone(),
+                // DHCP: the key "" in `works_for` means plain DHCP DNS works.
+                State::NotSet => String::new(),
                 _ => return Err("no servers".to_string()),
             };
             if !self.works_for.contains(&first.as_str()) {
@@ -436,7 +456,8 @@ mod tests {
         let store = FakeStore::default();
         let (adapters, originals) =
             engine_wrote_first(&store, "cloudflare", [State::NotSet, static_dns("9.9.9.9")]);
-        let resolver = FakeResolver::working(&store, &[]);
+        // Neither provider resolves, but plain DHCP DNS ("") does.
+        let resolver = FakeResolver::working(&store, &[""]);
 
         let outcome = run_quietly(
             &store,
@@ -446,7 +467,10 @@ mod tests {
             &originals,
         );
 
-        assert_eq!(outcome, Outcome::FellBack { tried: names(&["Cloudflare", "Google"]) });
+        assert_eq!(
+            outcome,
+            Outcome::FellBack { tried: names(&["Cloudflare", "Google"]), internet_ok: true }
+        );
         // DHCP (not set) comes back as not set, not as an empty static list.
         assert_eq!(store.read(dns_setting(), Some(A)), State::NotSet);
         assert!(!store.snapshot().contains_key(&("dns.resolver".to_string(), Some(A.to_string()))));
@@ -602,6 +626,36 @@ mod tests {
     }
 
     #[test]
+    fn fell_back_reports_when_the_internet_still_does_not_work() {
+        let store = FakeStore::default();
+        let (adapters, originals) = engine_wrote_first(&store, "cloudflare", [State::NotSet, State::NotSet]);
+        // Nothing resolves, not even DHCP DNS, after the originals are back.
+        let resolver = FakeResolver::working(&store, &[]);
+
+        let outcome = run_quietly(
+            &store,
+            &resolver,
+            &spec(&["cloudflare"], Choose::FirstWorking),
+            &adapters,
+            &originals,
+        );
+
+        assert_eq!(outcome, Outcome::FellBack { tried: names(&["Cloudflare"]), internet_ok: false });
+        let text = message(&outcome);
+        assert!(text.contains("the internet does not seem to work right now"), "{text}");
+        assert!(text.contains(REPORT_URL), "{text}");
+    }
+
+    #[test]
+    fn the_ipv6_note_goes_with_encrypted_outcomes_only() {
+        let on = Outcome::Encrypted { provider: "Cloudflare".into(), skipped: vec![] };
+        let note = ipv6_note(&on).expect("a note after success");
+        assert!(note.contains("IPv6"), "{note}");
+        assert_eq!(ipv6_note(&Outcome::FellBack { tried: vec![], internet_ok: true }), None);
+        assert_eq!(ipv6_note(&Outcome::ProgramError("x".into())), None);
+    }
+
+    #[test]
     fn median_of_an_odd_and_even_count() {
         assert_eq!(median(&mut [ms(30), ms(10), ms(20)]), Some(ms(20)));
         assert_eq!(median(&mut [ms(10), ms(20), ms(30), ms(40)]), Some(ms(25)));
@@ -620,7 +674,7 @@ mod tests {
             "Cloudflare did not work on this network; using Google instead.\nEncrypted DNS is on: Google (DoH)."
         );
         assert_eq!(
-            message(&Outcome::FellBack { tried: names(&["Cloudflare"]) }),
+            message(&Outcome::FellBack { tried: names(&["Cloudflare"]), internet_ok: true }),
             "Encrypted DNS did not work on this network, so your DNS was put back as it was. Nothing is broken."
         );
         assert_eq!(
@@ -643,7 +697,7 @@ mod tests {
 
         let others = [
             message(&Outcome::Encrypted { provider: "Google".into(), skipped: names(&["Cloudflare"]) }),
-            message(&Outcome::FellBack { tried: names(&["Cloudflare", "Google"]) }),
+            message(&Outcome::FellBack { tried: names(&["Cloudflare", "Google"]), internet_ok: true }),
             precheck_message(&Precheck::NoInternet).unwrap(),
             precheck_message(&Precheck::Unsupported).unwrap(),
         ];

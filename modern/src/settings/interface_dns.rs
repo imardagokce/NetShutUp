@@ -71,12 +71,13 @@ pub fn write(adapter_guid: &str, state: &State) -> Result<(), String> {
         .enumerate()
         .filter_map(|(index, server)| server.doh.as_ref().map(|doh| (index, doh)))
         .collect();
-    let mut templates: Vec<Vec<u16>> = with_doh.iter().map(|(_, doh)| wide(&doh.template)).collect();
+    let mut templates: Vec<Vec<u16>> =
+        with_doh.iter().map(|(_, doh)| template_buffer(&doh.template)).collect();
     let mut doh_settings: Vec<DNS_DOH_SERVER_SETTINGS> = templates
         .iter_mut()
         .zip(&with_doh)
         .map(|(template, (_, doh))| DNS_DOH_SERVER_SETTINGS {
-            Template: PWSTR(template.as_mut_ptr()),
+            Template: pointer_to(template),
             Flags: doh.flags,
         })
         .collect();
@@ -106,6 +107,16 @@ pub fn write(adapter_guid: &str, state: &State) -> Result<(), String> {
 
     let code = unsafe { SetInterfaceDnsSettings(guid, (&raw const settings).cast()) };
     if code.0 == ERROR_SUCCESS { Ok(()) } else { Err(error_text(code.0)) }
+}
+
+/// A DoH template as UTF-16. An empty template stays empty: it is read from
+/// and written back to Windows as NULL, not as an empty string.
+fn template_buffer(template: &str) -> Vec<u16> {
+    if template.is_empty() { Vec::new() } else { wide(template) }
+}
+
+fn pointer_to(buffer: &mut Vec<u16>) -> PWSTR {
+    if buffer.is_empty() { PWSTR::null() } else { PWSTR(buffer.as_mut_ptr()) }
 }
 
 /// NUL-terminated UTF-16 copy of `text`.
@@ -169,6 +180,15 @@ mod tests {
             parse_guid("d7747ac7-885f-4a75-8f0c-84ba153614ec")
         );
         assert!(parse_guid("nonsense").is_none());
+    }
+
+    #[test]
+    fn empty_template_is_written_as_null() {
+        let mut empty = template_buffer("");
+        assert!(pointer_to(&mut empty).is_null());
+        let mut filled = template_buffer("https://dns.google/dns-query");
+        assert!(!pointer_to(&mut filled).is_null());
+        assert_eq!(filled.last(), Some(&0), "NUL-terminated");
     }
 
     #[test]
