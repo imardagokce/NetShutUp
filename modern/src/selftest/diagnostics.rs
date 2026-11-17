@@ -3,6 +3,13 @@
 //! with the computer or its network. Nothing is collected outside this struct.
 
 use serde::Serialize;
+use windows::Win32::Globalization::GetUserDefaultLocaleName;
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+use windows::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
+
+use crate::settings::registry;
+use crate::version;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Diagnostics {
@@ -83,6 +90,135 @@ pub const ALLOWED_KEYS: &[&str] = &[
     "dhcp", "ipv6", "driver", "provider", "version", "date", "count", "value",
 ];
 
+
+const WINDOWS_VERSION_KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+const BIOS_KEY: &str = r"HARDWARE\DESCRIPTION\System\BIOS";
+const CPU_KEY: &str = r"HARDWARE\DESCRIPTION\System\CentralProcessor\0";
+const TCPIP_KEY: &str = r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters";
+const INTERNET_SETTINGS_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+
+/// Policy values worth knowing because they can override what NetShutUp sets:
+/// (key under HKLM, value name).
+const POLICIES: &[(&str, &str)] = &[
+    (r"SOFTWARE\Policies\Microsoft\Windows NT\DNSClient", "DoHPolicy"),
+    (r"SOFTWARE\Policies\Microsoft\Windows NT\DNSClient", "EnableMulticast"),
+    (r"SOFTWARE\Policies\Microsoft\Windows\DataCollection", "AllowTelemetry"),
+    (r"SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization", "DODownloadMode"),
+];
+
+const TIME_ZONE_ID_DAYLIGHT: u32 = 2;
+
+/// Everything about the system itself (not its adapters). Read-only; a source
+/// that cannot be read leaves its field empty, never an error.
+pub fn collect_system() -> Diagnostics {
+    let text = |key: &str, value: &str| {
+        registry::read_string(HKEY_LOCAL_MACHINE, key, value)
+            .ok()
+            .flatten()
+            .map(|found| found.trim().to_string())
+            .filter(|found| !found.is_empty())
+    };
+    let (major, minor, build) = version::get_windows_version();
+
+    let product = text(WINDOWS_VERSION_KEY, "ProductName").unwrap_or_default();
+    let edition_id = text(WINDOWS_VERSION_KEY, "EditionID").unwrap_or_default();
+    let manufacturer = text(BIOS_KEY, "SystemManufacturer");
+    let model = text(BIOS_KEY, "SystemProductName");
+
+    let read_policy = |key: &str, value: &str| -> Option<String> {
+        match registry::read_dword(HKEY_LOCAL_MACHINE, key, value) {
+            Ok(Some(number)) => Some(number.to_string()),
+            _ => registry::read_string(HKEY_LOCAL_MACHINE, key, value).ok().flatten(),
+        }
+    };
+
+    Diagnostics {
+        program: env!("CARGO_PKG_VERSION").to_string(),
+        windows: WindowsInfo {
+            name: windows_name(major, minor, build),
+            display_version: text(WINDOWS_VERSION_KEY, "DisplayVersion"),
+            build,
+            revision: registry::read_dword(HKEY_LOCAL_MACHINE, WINDOWS_VERSION_KEY, "UBR")
+                .ok()
+                .flatten(),
+            edition: Some(edition_label(&product, &edition_id)).filter(|label| !label.is_empty()),
+            arch: std::env::consts::ARCH.to_string(),
+        },
+        locale: locale_name(),
+        utc_offset_minutes: utc_offset_minutes(),
+        cpu: text(CPU_KEY, "ProcessorNameString"),
+        logical_cores: std::thread::available_parallelism().ok().map(|n| n.get() as u32),
+        ram_mb: total_ram_mb(),
+        machine: match (manufacturer, model) {
+            (None, None) => None,
+            (manufacturer, model) => Some(MachineInfo {
+                manufacturer: manufacturer.unwrap_or_default(),
+                model: model.unwrap_or_default(),
+            }),
+        },
+        domain_joined: Some(text(TCPIP_KEY, "Domain").is_some()),
+        policies: policy_rows(&read_policy),
+        proxy_enabled: match registry::read_dword(HKEY_CURRENT_USER, INTERNET_SETTINGS_KEY, "ProxyEnable") {
+            Ok(Some(number)) => Some(number != 0),
+            Ok(None) => Some(false),
+            Err(_) => None,
+        },
+        ..Diagnostics::default()
+    }
+}
+
+/// The Windows 11 registry still says "Windows 10" in `ProductName`, so the
+/// name comes from the build number.
+fn windows_name(major: u32, minor: u32, build: u32) -> String {
+    match (major, build) {
+        (10, 22000..) => "Windows 11".to_string(),
+        (10, _) => "Windows 10".to_string(),
+        _ => format!("Windows {major}.{minor}"),
+    }
+}
+
+fn edition_label(product: &str, edition_id: &str) -> String {
+    if edition_id.is_empty() { product.to_string() } else { edition_id.to_string() }
+}
+
+/// The policy values that exist, as name and value.
+fn policy_rows(read: &dyn Fn(&str, &str) -> Option<String>) -> Vec<PolicyValue> {
+    POLICIES
+        .iter()
+        .filter_map(|(key, name)| {
+            read(key, name).map(|value| PolicyValue { name: (*name).to_string(), value })
+        })
+        .collect()
+}
+
+fn locale_name() -> Option<String> {
+    let mut buffer = [0u16; 85];
+    let length = unsafe { GetUserDefaultLocaleName(&mut buffer) };
+    // The count includes the terminating NUL.
+    (length > 1).then(|| String::from_utf16_lossy(&buffer[..length as usize - 1]))
+}
+
+/// Offset from UTC in minutes (positive east of Greenwich), daylight saving included.
+fn utc_offset_minutes() -> Option<i32> {
+    let mut zone = TIME_ZONE_INFORMATION::default();
+    let id = unsafe { GetTimeZoneInformation(&mut zone) };
+    // u32::MAX is TIME_ZONE_ID_INVALID.
+    if id == u32::MAX {
+        return None;
+    }
+    let daylight = if id == TIME_ZONE_ID_DAYLIGHT { zone.DaylightBias } else { 0 };
+    Some(-(zone.Bias + daylight))
+}
+
+fn total_ram_mb() -> Option<u64> {
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    unsafe { GlobalMemoryStatusEx(&mut status) }.ok()?;
+    Some(status.ullTotalPhys / (1024 * 1024))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +276,40 @@ mod tests {
             serde_json::Value::Array(items) => items.iter().for_each(|item| keys(item, into)),
             _ => {}
         }
+    }
+
+    #[test]
+    fn edition_label_prefers_the_edition_id_and_falls_back_to_the_product_name() {
+        assert_eq!(edition_label("Windows 11 Home Single Language", "CoreSingleLanguage"), "CoreSingleLanguage");
+        assert_eq!(edition_label("Windows 10 Pro", ""), "Windows 10 Pro");
+    }
+
+    #[test]
+    fn policy_rows_lists_only_values_that_exist() {
+        let read = |key: &str, value: &str| {
+            (key.ends_with("DataCollection") && value == "AllowTelemetry").then(|| "0".to_string())
+        };
+        let rows = policy_rows(&read);
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].name.as_str(), rows[0].value.as_str()), ("AllowTelemetry", "0"));
+    }
+
+    #[test]
+    fn windows_name_follows_the_build_not_the_registry_product_name() {
+        assert_eq!(windows_name(10, 0, 26200), "Windows 11");
+        assert_eq!(windows_name(10, 0, 19045), "Windows 10");
+        assert_eq!(windows_name(6, 3, 9600), "Windows 6.3");
+    }
+
+    /// Read-only: runs against the machine running the tests.
+    #[test]
+    fn collect_system_fills_the_basics_on_this_machine() {
+        let found = collect_system();
+        assert_eq!(found.program, env!("CARGO_PKG_VERSION"));
+        assert!(found.windows.build > 0);
+        assert!(!found.windows.arch.is_empty());
+        assert!(found.logical_cores.unwrap_or(0) > 0);
+        assert!(found.ram_mb.unwrap_or(0) > 0);
     }
 
     #[test]
