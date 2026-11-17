@@ -1,0 +1,860 @@
+//! Runs the self-test: reads everything, then applies and reverts each profile
+//! for real, checking at every step. It uses the same engine as `apply` and
+//! `revert`, so what it proves is what the program does.
+//!
+//! The outside world (settings store, resolver, time, administrator rights)
+//! comes in through `Env`, so the whole run is tested with fakes.
+
+use std::path::PathBuf;
+use std::time::Instant;
+
+use crate::dns::{self, Outcome, Precheck, Resolver};
+use crate::settings::apply::{self, ApplyError};
+use crate::settings::backup;
+use crate::settings::catalog::{self, CATALOG, Scope};
+use crate::settings::plan;
+use crate::settings::profile::Profile;
+use crate::settings::provider;
+use crate::settings::reader::{self, State};
+use crate::settings::store::Store;
+
+use super::diagnostics::Diagnostics;
+use super::mask::mask_guid;
+use super::{Check, Cycle, Report, Status};
+
+pub struct EnvAdapter {
+    pub guid: String,
+    pub name: String,
+}
+
+pub trait Env {
+    fn store(&self) -> &dyn Store;
+    fn resolver(&self) -> &dyn Resolver;
+    /// The Ethernet and Wi-Fi hardware adapters profiles apply to.
+    fn adapters(&self) -> Vec<EnvAdapter>;
+    fn windows_build(&self) -> u32;
+    fn elevated(&self) -> bool;
+    fn backup_dir(&self) -> PathBuf;
+    /// `YYYYMMDD-HHMMSS`.
+    fn timestamp(&self) -> String;
+    /// Marks that a self-test is running (a file), so an interrupted one can be noticed.
+    fn set_in_progress(&self, on: bool);
+}
+
+/// The value of every catalog setting: system-wide ones once, per-adapter ones
+/// for each adapter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Snapshot(pub(crate) Vec<(String, Option<String>, State)>);
+
+pub fn snapshot(store: &dyn Store, adapters: &[EnvAdapter]) -> Snapshot {
+    let mut entries = Vec::new();
+    for setting in CATALOG {
+        match setting.scope {
+            Scope::System => {
+                entries.push((setting.id.to_string(), None, store.read(setting, None)));
+            }
+            Scope::Adapter => {
+                for adapter in adapters {
+                    entries.push((
+                        setting.id.to_string(),
+                        Some(adapter.guid.clone()),
+                        store.read(setting, Some(&adapter.guid)),
+                    ));
+                }
+            }
+        }
+    }
+    Snapshot(entries)
+}
+
+/// What differs between two snapshots, one line each. A service counts as the
+/// same when its start type is, like everywhere else in the program.
+pub fn differences(before: &Snapshot, after: &Snapshot) -> Vec<String> {
+    if before.0.len() != after.0.len() {
+        return vec!["the two snapshots cover different settings".to_string()];
+    }
+    before
+        .0
+        .iter()
+        .zip(&after.0)
+        .filter(|((_, _, was), (_, _, now))| was != now && !reader::matches(was, now))
+        .map(|((id, adapter, was), (_, _, now))| {
+            let (was, now) = match catalog::find(id) {
+                Some(setting) => (reader::format(setting, was), reader::format(setting, now)),
+                None => (format!("{was:?}"), format!("{now:?}")),
+            };
+            let place = adapter.as_deref().map_or("system".to_string(), mask_guid);
+            format!("{id} ({place}): was {was}, now {now}")
+        })
+        .collect()
+}
+
+fn millis(since: Instant) -> u64 {
+    since.elapsed().as_millis() as u64
+}
+
+fn check(id: &str, title: &str, status: Status, detail: &str, since: Instant) -> Check {
+    Check::new(id, title, status, detail, millis(since))
+}
+
+fn pass_or_fail(ok: bool) -> Status {
+    if ok { Status::Pass } else { Status::Fail }
+}
+
+/// Runs the whole self-test. The in-progress marker is set for the duration;
+/// if the program dies mid-run the marker stays, which is the point.
+pub fn run(
+    env: &dyn Env,
+    profiles: &[Profile],
+    diagnostics: Diagnostics,
+    say: &mut dyn FnMut(&str),
+) -> Report {
+    env.set_in_progress(true);
+    let report = run_inner(env, profiles, diagnostics, say);
+    env.set_in_progress(false);
+    report
+}
+
+fn run_inner(
+    env: &dyn Env,
+    profiles: &[Profile],
+    diagnostics: Diagnostics,
+    say: &mut dyn FnMut(&str),
+) -> Report {
+    let started = Instant::now();
+    let adapters = env.adapters();
+    let guids: Vec<String> = adapters.iter().map(|adapter| adapter.guid.clone()).collect();
+    let dns_ok = env.windows_build() >= dns::FIRST_BUILD_WITH_DOH;
+
+    say("Checking the environment...");
+    let (environment, can_write) = environment_checks(env, &adapters);
+    let start = snapshot(env.store(), &adapters);
+
+    say("Checking that every setting can be read...");
+    let reading = reading_checks(env, profiles, &adapters, &guids, dns_ok);
+
+    let mut cycles = Vec::new();
+    let mut created = Vec::new();
+    let mut revert_failed = false;
+    for profile in profiles {
+        if !can_write {
+            cycles.push(skipped_cycle(profile, "needs administrator rights, an Ethernet or Wi-Fi adapter and a writable backup folder"));
+            continue;
+        }
+        if revert_failed {
+            break;
+        }
+        say(&format!("{}: applying and reverting...", profile.name));
+        let result = cycle(env, profile, &adapters, &guids, dns_ok, &mut created, say);
+        revert_failed = result.revert_failed;
+        cycles.push(result.cycle);
+    }
+
+    say("Comparing the end state with the start...");
+    let began = Instant::now();
+    let differing = differences(&start, &snapshot(env.store(), &adapters));
+    let mut closing = vec![check(
+        "closing.snapshot",
+        "Every setting is as it was at the start",
+        pass_or_fail(differing.is_empty()),
+        &if differing.is_empty() { "no difference".to_string() } else { differing.join("; ") },
+        began,
+    )];
+    let began = Instant::now();
+    let active: Vec<String> = created
+        .iter()
+        .filter(|path| path.exists())
+        .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().to_string()))
+        .collect();
+    closing.push(check(
+        "closing.backups",
+        "Every backup made here is marked as reverted",
+        pass_or_fail(active.is_empty()),
+        &if active.is_empty() {
+            format!("{} backup(s), all marked", created.len())
+        } else {
+            format!("still active: {}", active.join(", "))
+        },
+        began,
+    ));
+    let began = Instant::now();
+    closing.push(check(
+        "closing.internet",
+        "DNS resolves at the end",
+        pass_or_fail(dns::internet_works(env.resolver())),
+        "",
+        began,
+    ));
+
+    Report {
+        schema: Report::SCHEMA,
+        program_version: env!("CARGO_PKG_VERSION").to_string(),
+        created: env.timestamp(),
+        total_millis: millis(started),
+        all_restored: !revert_failed && differing.is_empty(),
+        diagnostics,
+        environment,
+        reading,
+        cycles,
+        closing,
+    }
+}
+
+fn skipped_cycle(profile: &Profile, reason: &str) -> Cycle {
+    Cycle {
+        profile: profile.id.clone(),
+        checks: vec![Check::new("cycle", "Apply and revert", Status::Skip, reason, 0)],
+    }
+}
+
+/// The checks about the computer, and whether it is fit to write to.
+fn environment_checks(env: &dyn Env, adapters: &[EnvAdapter]) -> (Vec<Check>, bool) {
+    let mut checks = Vec::new();
+
+    let began = Instant::now();
+    let elevated = env.elevated();
+    checks.push(check(
+        "admin",
+        "Running with administrator rights",
+        pass_or_fail(elevated),
+        if elevated { "yes" } else { "no: applying and reverting need it" },
+        began,
+    ));
+
+    let began = Instant::now();
+    checks.push(check(
+        "windows",
+        "Windows build",
+        Status::Info,
+        &format!("build {}", env.windows_build()),
+        began,
+    ));
+
+    let began = Instant::now();
+    checks.push(check(
+        "adapters",
+        "Ethernet or Wi-Fi adapters found",
+        pass_or_fail(!adapters.is_empty()),
+        &format!("{} adapter(s)", adapters.len()),
+        began,
+    ));
+
+    let began = Instant::now();
+    let writable = backup_folder_writable(&env.backup_dir());
+    checks.push(check(
+        "backup_dir",
+        "Backup folder is writable",
+        pass_or_fail(writable.is_ok()),
+        &writable.clone().err().unwrap_or_else(|| "yes".to_string()),
+        began,
+    ));
+
+    let began = Instant::now();
+    checks.push(check(
+        "internet",
+        "DNS resolves now",
+        pass_or_fail(dns::internet_works(env.resolver())),
+        "",
+        began,
+    ));
+
+    let can_write = elevated && !adapters.is_empty() && writable.is_ok();
+    (checks, can_write)
+}
+
+fn backup_folder_writable(dir: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|error| format!("cannot create the folder: {error}"))?;
+    let probe = dir.join(".selftest-write-test");
+    std::fs::write(&probe, b"x").map_err(|error| format!("cannot write there: {error}"))?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
+/// Read-only checks: every setting readable, every profile plannable, and
+/// planning changes nothing.
+fn reading_checks(
+    env: &dyn Env,
+    profiles: &[Profile],
+    adapters: &[EnvAdapter],
+    guids: &[String],
+    dns_ok: bool,
+) -> Vec<Check> {
+    let store = env.store();
+    let before = snapshot(store, adapters);
+    let mut checks = Vec::new();
+
+    for setting in CATALOG {
+        let id = format!("read.{}", setting.id);
+        let title = format!("Read: {}", setting.name);
+        let began = Instant::now();
+        if setting.id == plan::DNS_SETTING && !dns_ok {
+            checks.push(check(&id, &title, Status::Skip, "this Windows version has no encrypted DNS", began));
+            continue;
+        }
+        let places: Vec<Option<&str>> = match setting.scope {
+            Scope::System => vec![None],
+            Scope::Adapter => guids.iter().map(|guid| Some(guid.as_str())).collect(),
+        };
+        if places.is_empty() {
+            checks.push(check(&id, &title, Status::Skip, "no adapters", began));
+            continue;
+        }
+        let unreadable: Vec<String> = places
+            .iter()
+            .filter_map(|place| match store.read(setting, *place) {
+                State::Unavailable(reason) => {
+                    Some(format!("{}: {reason}", place.map_or("system".to_string(), mask_guid)))
+                }
+                _ => None,
+            })
+            .collect();
+        checks.push(check(
+            &id,
+            &title,
+            pass_or_fail(unreadable.is_empty()),
+            &if unreadable.is_empty() { "readable".to_string() } else { unreadable.join("; ") },
+            began,
+        ));
+    }
+
+    for profile in profiles {
+        let began = Instant::now();
+        let (planned, _dropped) = plan::plan_profile(store, profile, guids, dns_ok);
+        let needed = planned.iter().filter(|change| change.is_needed()).count();
+        let (status, detail) = match apply::check(&planned) {
+            Ok(()) => (Status::Pass, format!("{needed} change(s) would be made")),
+            Err(reason) => (Status::Fail, reason),
+        };
+        checks.push(check(&format!("plan.{}", profile.id), &format!("Plan: {}", profile.name), status, &detail, began));
+    }
+
+    let began = Instant::now();
+    let after = snapshot(store, adapters);
+    checks.push(check(
+        "plan.writes_nothing",
+        "Reading and planning changed nothing",
+        pass_or_fail(before == after),
+        "",
+        began,
+    ));
+    checks
+}
+
+struct CycleResult {
+    cycle: Cycle,
+    revert_failed: bool,
+}
+
+/// One profile: apply, verify, DNS trial, internet, revert, compare.
+fn cycle(
+    env: &dyn Env,
+    profile: &Profile,
+    adapters: &[EnvAdapter],
+    guids: &[String],
+    dns_ok: bool,
+    created: &mut Vec<PathBuf>,
+    say: &mut dyn FnMut(&str),
+) -> CycleResult {
+    let store = env.store();
+    let resolver = env.resolver();
+    let mut checks: Vec<Check> = Vec::new();
+    let done = |checks: Vec<Check>, revert_failed: bool| CycleResult {
+        cycle: Cycle { profile: profile.id.clone(), checks },
+        revert_failed,
+    };
+    let before = snapshot(store, adapters);
+
+    let (planned, _dropped) = plan::plan_profile(store, profile, guids, dns_ok);
+    let dns_needed = planned.iter().filter(|c| plan::is_dns(c) && c.is_needed()).count();
+    let began = Instant::now();
+    let precheck = if dns_needed > 0 {
+        dns::precheck(resolver, env.windows_build())
+    } else {
+        Precheck::Go
+    };
+    if let Some(text) = dns::precheck_message(&precheck) {
+        checks.push(check("dns.precheck", "DNS precheck", Status::Info, &text, began));
+    }
+    let to_apply = plan::plan_for_precheck(&planned, &precheck);
+    let needed = to_apply.iter().filter(|change| change.is_needed()).count();
+    if needed == 0 {
+        checks.push(Check::new(
+            "apply",
+            "Apply",
+            Status::Skip,
+            "every setting already matches this profile",
+            0,
+        ));
+        return done(checks, false);
+    }
+
+    let began = Instant::now();
+    let applied = apply::apply(
+        store,
+        &env.backup_dir(),
+        &format!("selftest {}", profile.id),
+        &env.timestamp(),
+        &to_apply,
+    );
+    let backup_path = match applied {
+        Ok(Some(path)) => {
+            created.push(path.clone());
+            checks.push(check("apply", "Apply", Status::Pass, &format!("{needed} change(s) written"), began));
+            path
+        }
+        Ok(None) => {
+            checks.push(check("apply", "Apply", Status::Skip, "nothing to change", began));
+            return done(checks, false);
+        }
+        Err(ApplyError::Refused(reason)) => {
+            checks.push(check("apply", "Apply", Status::Fail, &format!("refused: {reason}"), began));
+            return done(checks, false);
+        }
+        Err(ApplyError::RolledBack { cause, leftovers }) => {
+            let detail = if leftovers.is_empty() {
+                format!("{cause}; everything written was undone")
+            } else {
+                format!("{cause}; could NOT undo: {}", leftovers.join("; "))
+            };
+            checks.push(check("apply", "Apply", Status::Fail, &detail, began));
+            return done(checks, !leftovers.is_empty());
+        }
+    };
+
+    // The values the engine wrote read back as asked (DNS is checked below).
+    let began = Instant::now();
+    let wrong: Vec<&str> = to_apply
+        .iter()
+        .filter(|change| change.is_needed() && !plan::is_dns(change))
+        .filter(|change| {
+            let actual = store.read(change.target.setting, change.target.adapter.as_deref());
+            !reader::matches(&change.target.desired, &actual)
+        })
+        .map(|change| change.target.setting.id)
+        .collect();
+    checks.push(check(
+        "verify",
+        "Written values read back as asked",
+        pass_or_fail(wrong.is_empty()),
+        &if wrong.is_empty() { "yes".to_string() } else { wrong.join(", ") },
+        began,
+    ));
+
+    if let (true, Some(spec)) = (to_apply.iter().any(plan::is_dns), profile.dns.as_ref()) {
+        let (scope, originals) = plan::dns_trial_scope(&to_apply);
+        let began = Instant::now();
+        let outcome = dns::run(store, resolver, spec, &scope, &originals, &mut *say);
+        match &outcome {
+            Outcome::Encrypted { provider, skipped } => {
+                let detail = if skipped.is_empty() {
+                    format!("{provider} works")
+                } else {
+                    format!("{provider} works; {} did not", skipped.join(", "))
+                };
+                checks.push(check("dns.trial", "Encrypted DNS trial", Status::Pass, &detail, began));
+
+                let began = Instant::now();
+                let want = provider::PROVIDERS
+                    .iter()
+                    .find(|candidate| candidate.name == provider)
+                    .map(|candidate| candidate.state());
+                let dns_setting = catalog::find(plan::DNS_SETTING);
+                let bad: Vec<String> = match (want, dns_setting) {
+                    (Some(want), Some(setting)) => scope
+                        .iter()
+                        .filter(|adapter| store.read(setting, Some(adapter)) != want)
+                        .map(|adapter| mask_guid(adapter))
+                        .collect(),
+                    _ => vec!["provider unknown".to_string()],
+                };
+                checks.push(check(
+                    "dns.readback",
+                    "Encrypted DNS settings read back from Windows",
+                    pass_or_fail(bad.is_empty()),
+                    &if bad.is_empty() { "yes".to_string() } else { format!("differs on {}", bad.join(", ")) },
+                    began,
+                ));
+            }
+            Outcome::FellBack { tried, internet_ok } => {
+                checks.push(check(
+                    "dns.trial",
+                    "Encrypted DNS trial",
+                    Status::Info,
+                    &format!("this network did not allow encrypted DNS (tried {}); DNS was put back", tried.join(", ")),
+                    began,
+                ));
+                if !internet_ok {
+                    checks.push(check(
+                        "dns.internet_after_fallback",
+                        "DNS resolves after the fallback",
+                        Status::Fail,
+                        "no",
+                        began,
+                    ));
+                }
+            }
+            Outcome::ProgramError(reason) => {
+                checks.push(check("dns.trial", "Encrypted DNS trial", Status::Fail, reason, began));
+            }
+        }
+    }
+
+    let began = Instant::now();
+    checks.push(check(
+        "internet.after_apply",
+        "DNS resolves while the profile is applied",
+        pass_or_fail(dns::internet_works(resolver)),
+        "",
+        began,
+    ));
+
+    // Always revert once something was written, whatever failed above.
+    let began = Instant::now();
+    let reverted = match backup::load(&backup_path) {
+        Ok(saved) => {
+            let errors = apply::revert(store, &saved);
+            if errors.is_empty() {
+                let _ = backup::mark_reverted(&backup_path);
+                Ok(())
+            } else {
+                Err(errors.join("; "))
+            }
+        }
+        Err(reason) => Err(reason),
+    };
+    checks.push(check(
+        "revert",
+        "Revert",
+        pass_or_fail(reverted.is_ok()),
+        &reverted.clone().err().unwrap_or_else(|| "done".to_string()),
+        began,
+    ));
+    if reverted.is_err() {
+        return done(checks, true);
+    }
+
+    let began = Instant::now();
+    let differing = differences(&before, &snapshot(store, adapters));
+    checks.push(check(
+        "restored",
+        "Every setting is as it was before this profile",
+        pass_or_fail(differing.is_empty()),
+        &if differing.is_empty() { "yes".to_string() } else { differing.join("; ") },
+        began,
+    ));
+    let began = Instant::now();
+    checks.push(check(
+        "internet.after_revert",
+        "DNS resolves after the revert",
+        pass_or_fail(dns::internet_works(resolver)),
+        "",
+        began,
+    ));
+    done(checks, false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::backup::testing::temp_dir;
+    use crate::settings::catalog::CATALOG;
+    use crate::settings::profile;
+    use crate::settings::reader::Value;
+    use crate::settings::store::testing::FakeStore;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    const A: &str = "{AAAAAAAA-0000-0000-0000-000000000001}";
+    const B: &str = "{BBBBBBBB-0000-0000-0000-000000000002}";
+
+    /// Resolves according to what the fake store says adapter A's DNS is.
+    struct FakeResolver {
+        store: Rc<FakeStore>,
+        plain_works: bool,
+        works_for: Vec<&'static str>,
+        /// Internet "breaks" while the LLMNR policy is disabled.
+        break_on_llmnr: bool,
+        on_lookup: Option<Box<dyn Fn()>>,
+    }
+
+    impl Resolver for FakeResolver {
+        fn lookup(&self, name: &str) -> Result<Duration, String> {
+            if let Some(hook) = &self.on_lookup {
+                hook();
+            }
+            let llmnr = self.store.values.borrow().get(&("dns.llmnr".to_string(), None)).cloned();
+            if self.break_on_llmnr && llmnr == Some(State::Value(Value::Dword(0))) {
+                return Err(format!("{name}: simulated outage"));
+            }
+            let dns = catalog::find("dns.resolver").unwrap();
+            match self.store.read(dns, Some(A)) {
+                State::NotSet if self.plain_works => Ok(Duration::from_millis(10)),
+                State::Value(Value::Dns(servers))
+                    if self.works_for.contains(&servers[0].address.as_str()) =>
+                {
+                    Ok(Duration::from_millis(10))
+                }
+                _ => Err(format!("{name}: simulated failure")),
+            }
+        }
+
+        fn flush_cache(&self) {}
+    }
+
+    struct FakeEnv {
+        store: Rc<FakeStore>,
+        resolver: FakeResolver,
+        adapters: Vec<EnvAdapter>,
+        elevated: bool,
+        dir: PathBuf,
+        marker: RefCell<Vec<bool>>,
+    }
+
+    impl Env for FakeEnv {
+        fn store(&self) -> &dyn Store {
+            &*self.store
+        }
+        fn resolver(&self) -> &dyn Resolver {
+            &self.resolver
+        }
+        fn adapters(&self) -> Vec<EnvAdapter> {
+            self.adapters
+                .iter()
+                .map(|a| EnvAdapter { guid: a.guid.clone(), name: a.name.clone() })
+                .collect()
+        }
+        fn windows_build(&self) -> u32 {
+            26200
+        }
+        fn elevated(&self) -> bool {
+            self.elevated
+        }
+        fn backup_dir(&self) -> PathBuf {
+            self.dir.clone()
+        }
+        fn timestamp(&self) -> String {
+            "20261117-120000".to_string()
+        }
+        fn set_in_progress(&self, on: bool) {
+            self.marker.borrow_mut().push(on);
+        }
+    }
+
+    fn env_with(name: &str, store: FakeStore, adapters: &[&str]) -> FakeEnv {
+        let store = Rc::new(store);
+        FakeEnv {
+            resolver: FakeResolver {
+                store: Rc::clone(&store),
+                plain_works: true,
+                works_for: vec!["9.9.9.9", "1.1.1.1", "8.8.8.8"],
+                break_on_llmnr: false,
+                on_lookup: None,
+            },
+            store,
+            adapters: adapters
+                .iter()
+                .map(|guid| EnvAdapter { guid: guid.to_string(), name: "Test".to_string() })
+                .collect(),
+            elevated: true,
+            dir: temp_dir(name),
+            marker: RefCell::new(Vec::new()),
+        }
+    }
+
+    fn env(name: &str) -> FakeEnv {
+        env_with(name, FakeStore::default(), &[A, B])
+    }
+
+    fn run_it(env: &FakeEnv) -> Report {
+        let profiles = profile::builtin().unwrap();
+        run(env, &profiles, Diagnostics::default(), &mut |_| {})
+    }
+
+    fn cycle<'a>(report: &'a Report, profile: &str) -> &'a Cycle {
+        report.cycles.iter().find(|c| c.profile == profile).expect("cycle present")
+    }
+
+    fn status(cycle: &Cycle, id: &str) -> Status {
+        cycle.checks.iter().find(|c| c.id == id).unwrap_or_else(|| panic!("no check {id}")).status
+    }
+
+    fn failures(report: &Report) -> Vec<String> {
+        report.all_checks().filter(|c| c.status == Status::Fail).map(|c| c.id.clone()).collect()
+    }
+
+    #[test]
+    fn all_green_run_applies_and_reverts_every_profile() {
+        let env = env("selftest-green");
+        let before = env.store.snapshot();
+
+        let report = run_it(&env);
+
+        assert_eq!(report.cycles.len(), 3);
+        assert!(failures(&report).is_empty(), "{:?}", failures(&report));
+        assert!(report.all_restored);
+        assert_eq!(env.store.snapshot(), before, "the system ends as it started");
+        assert_eq!(report.schema, Report::SCHEMA);
+    }
+
+    #[test]
+    fn failed_apply_is_reported_and_the_next_profile_still_runs() {
+        let store = FakeStore {
+            fail_id: Some("service.diagtrack"),
+            failures_left: Cell::new(1),
+            ..Default::default()
+        };
+        let env = env_with("selftest-apply-fail", store, &[A, B]);
+
+        let report = run_it(&env);
+
+        assert_eq!(status(cycle(&report, "privacy"), "apply"), Status::Fail);
+        assert_eq!(status(cycle(&report, "performance"), "apply"), Status::Pass);
+        assert_eq!(status(cycle(&report, "recommended"), "apply"), Status::Pass);
+        assert!(report.all_restored);
+    }
+
+    #[test]
+    fn failed_revert_stops_and_marks_nothing_restored() {
+        let probe = FakeStore::default();
+        let guids = [A.to_string(), B.to_string()];
+        let privacy = profile::builtin().unwrap().into_iter().find(|p| p.id == "privacy").unwrap();
+        let (plan, _) = plan::plan_profile(&probe, &privacy, &guids, true);
+        let needed = plan.iter().filter(|change| change.is_needed()).count() as u32;
+
+        // The apply uses exactly `needed` writes; every write after that fails.
+        let store = FakeStore { fail_after_writes: Some(needed), ..Default::default() };
+        let env = env_with("selftest-revert-fail", store, &[A, B]);
+
+        let report = run_it(&env);
+
+        assert_eq!(report.cycles.len(), 1, "later profiles are not run");
+        assert_eq!(status(cycle(&report, "privacy"), "revert"), Status::Fail);
+        assert!(!report.all_restored);
+        assert_eq!(env.resolver.store.writes.get(), needed, "no write after the failed revert");
+    }
+
+    #[test]
+    fn difference_after_revert_is_a_failure() {
+        let mut env = env("selftest-difference");
+        // Something outside the cycle changes during the run and is never restored.
+        let store = Rc::clone(&env.store);
+        // Only while a profile is applied (LLMNR is then disabled), never before
+        // the start snapshot is taken.
+        env.resolver.on_lookup = Some(Box::new(move || {
+            let applied = store.values.borrow().contains_key(&("dns.llmnr".to_string(), None));
+            if applied {
+                store.seed("tcp.nagle.no_delay", Some(A), State::Value(Value::Dword(1)));
+            }
+        }));
+
+        let report = run_it(&env);
+
+        assert!(!report.all_restored);
+        assert!(report.closing.iter().any(|c| c.status == Status::Fail), "{:?}", report.closing);
+    }
+
+    #[test]
+    fn internet_lost_after_apply_fails_the_check_but_still_reverts() {
+        let mut env = env("selftest-outage");
+        env.resolver.break_on_llmnr = true;
+
+        let report = run_it(&env);
+
+        let privacy = cycle(&report, "privacy");
+        assert_eq!(status(privacy, "internet.after_apply"), Status::Fail);
+        assert_eq!(status(privacy, "revert"), Status::Pass);
+        assert_eq!(status(privacy, "internet.after_revert"), Status::Pass);
+        assert!(report.all_restored);
+    }
+
+    #[test]
+    fn dns_fallback_is_info_not_fail() {
+        let mut env = env("selftest-fallback");
+        env.resolver.works_for = vec![]; // no provider resolves; plain DHCP DNS does
+
+        let report = run_it(&env);
+
+        for name in ["privacy", "performance", "recommended"] {
+            assert_eq!(status(cycle(&report, name), "dns.trial"), Status::Info, "{name}");
+        }
+        assert!(failures(&report).is_empty(), "{:?}", failures(&report));
+        assert!(report.all_restored);
+    }
+
+    #[test]
+    fn no_adapters_skips_the_cycles_without_writing() {
+        let env = env_with("selftest-none", FakeStore::default(), &[]);
+
+        let report = run_it(&env);
+
+        assert_eq!(env.store.writes.get(), 0);
+        assert_eq!(report.cycles.len(), 3);
+        assert!(report.cycles.iter().all(|c| c.checks.iter().all(|k| k.status == Status::Skip)));
+        let adapters_check = report.environment.iter().find(|c| c.id == "adapters").unwrap();
+        assert_eq!(adapters_check.status, Status::Fail);
+    }
+
+    #[test]
+    fn not_elevated_skips_the_cycles_without_writing() {
+        let mut env = env("selftest-not-admin");
+        env.elevated = false;
+
+        let report = run_it(&env);
+
+        assert_eq!(env.store.writes.get(), 0);
+        assert!(report.cycles.iter().all(|c| c.checks.iter().all(|k| k.status == Status::Skip)));
+    }
+
+    #[test]
+    fn marker_is_set_during_the_run_and_removed_after() {
+        let env = env("selftest-marker");
+        run_it(&env);
+        assert_eq!(env.marker.borrow().as_slice(), [true, false]);
+
+        let probe = FakeStore::default();
+        let guids = [A.to_string(), B.to_string()];
+        let privacy = profile::builtin().unwrap().into_iter().find(|p| p.id == "privacy").unwrap();
+        let (plan, _) = plan::plan_profile(&probe, &privacy, &guids, true);
+        let needed = plan.iter().filter(|change| change.is_needed()).count() as u32;
+        let stopping = env_with(
+            "selftest-marker-stop",
+            FakeStore { fail_after_writes: Some(needed), ..Default::default() },
+            &[A, B],
+        );
+        run_it(&stopping);
+        assert_eq!(stopping.marker.borrow().first(), Some(&true));
+        assert_eq!(stopping.marker.borrow().last(), Some(&false), "also when the run stops early");
+    }
+
+    #[test]
+    fn snapshot_covers_every_catalog_setting_per_adapter() {
+        let store = FakeStore::default();
+        let adapters = [
+            EnvAdapter { guid: A.into(), name: "x".into() },
+            EnvAdapter { guid: B.into(), name: "y".into() },
+        ];
+        let taken = snapshot(&store, &adapters);
+        let system = CATALOG.iter().filter(|s| s.scope == catalog::Scope::System).count();
+        let per_adapter = CATALOG.iter().filter(|s| s.scope == catalog::Scope::Adapter).count();
+        assert_eq!(taken.0.len(), system + per_adapter * 2);
+    }
+
+    #[test]
+    fn differences_ignores_a_service_running_state_change() {
+        let store = FakeStore::default();
+        let adapters: [EnvAdapter; 0] = [];
+        let service = |state| State::Value(Value::Service { state, start_type: 4 });
+        store.seed("service.diagtrack", None, service(1));
+        let before = snapshot(&store, &adapters);
+        store.seed("service.diagtrack", None, service(4));
+        let after = snapshot(&store, &adapters);
+        assert!(differences(&before, &after).is_empty());
+
+        store.seed("service.diagtrack", None, State::Value(Value::Service { state: 4, start_type: 2 }));
+        let changed = snapshot(&store, &adapters);
+        let found = differences(&before, &changed);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("service.diagtrack"), "{found:?}");
+    }
+}

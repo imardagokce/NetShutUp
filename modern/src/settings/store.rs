@@ -190,6 +190,8 @@ pub mod testing {
         pub failures_left: Cell<u32>,
         pub unreadable_id: Option<&'static str>,
         pub writes: Cell<u32>,
+        /// Every write fails once `writes` has reached this number.
+        pub fail_after_writes: Option<u32>,
         /// Changes what is stored, as Windows might normalise a written value.
         pub mangle: Option<fn(&State) -> State>,
         /// Every successful write, in order: (adapter, state written).
@@ -231,6 +233,9 @@ pub mod testing {
             if self.fail_id == Some(setting.id) && adapter_matches && self.failures_left.get() > 0 {
                 self.failures_left.set(self.failures_left.get() - 1);
                 return Err("simulated failure".to_string());
+            }
+            if self.fail_after_writes.is_some_and(|limit| self.writes.get() >= limit) {
+                return Err("simulated failure after the write limit".to_string());
             }
             self.writes.set(self.writes.get() + 1);
             self.log.borrow_mut().push((adapter.map(str::to_string), state.clone()));

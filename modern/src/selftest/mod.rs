@@ -7,6 +7,7 @@ use serde::Serialize;
 pub mod diagnostics;
 pub mod mask;
 pub mod render;
+pub mod runner;
 
 use diagnostics::Diagnostics;
 
