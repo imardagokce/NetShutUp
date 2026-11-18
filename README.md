@@ -100,9 +100,9 @@ The rules the code is built around (and tests enforce):
 - [x] Settings catalog (verified against Microsoft documentation) and read-only `scan` command
 - [x] Verified backup engine (`.nsub` UTF-8 plain text with atomic verification and "not set" restoration)
 - [x] Built-in profile preview engine (`preview <profile>`) with change diff summary
-- [ ] Apply and revert execution engine with automatic UAC elevation
+- [x] Apply and revert execution engine with automatic UAC elevation and safety rollback
 - [ ] Physical network adapter enumeration (`GetAdaptersAddresses`)
-- [ ] Interactive terminal menu
+- [ ] Native Win32 desktop GUI (O&O ShutUp10-style native interface)
 - [ ] Self-test mode with a masked report
 - [ ] First alpha release with a prebuilt `.exe`
 

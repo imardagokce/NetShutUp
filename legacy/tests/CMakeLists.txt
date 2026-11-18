@@ -13,6 +13,8 @@ set(LEGACY_LIB_SOURCES
     ${PROJECT_SOURCE_DIR}/src/scan.cpp
     ${PROJECT_SOURCE_DIR}/src/backup.cpp
     ${PROJECT_SOURCE_DIR}/src/preview.cpp
+    ${PROJECT_SOURCE_DIR}/src/elevation.cpp
+    ${PROJECT_SOURCE_DIR}/src/apply.cpp
 )
 
 # Common settings applied to every test target.
@@ -56,3 +58,11 @@ add_executable(test_preview
 )
 configure_test(test_preview)
 add_test(NAME preview COMMAND test_preview)
+
+# ── test_apply ────────────────────────────────────────────────────────────────
+add_executable(test_apply
+    test_apply.cpp
+    ${LEGACY_LIB_SOURCES}
+)
+configure_test(test_apply)
+add_test(NAME apply COMMAND test_apply)

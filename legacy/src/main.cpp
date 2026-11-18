@@ -6,6 +6,8 @@
 #include "version.h"
 #include "scan.h"
 #include "preview.h"
+#include "elevation.h"
+#include "apply.h"
 
 // ── Usage ─────────────────────────────────────────────────────────────────────
 
@@ -97,14 +99,47 @@ int wmain(int argc, wchar_t* argv[]) {
 
     // ── apply ─────────────────────────────────────────────────────────────────
     if (arg_eq(cmd, L"apply")) {
-        wprintf(L"apply: not yet implemented.\n");
-        return 0;
+        if (argc < 3) {
+            wprintf(L"Error: 'apply' requires a profile name.\n"
+                    L"Profiles: privacy | performance | recommended\n");
+            return 1;
+        }
+
+        const wchar_t* profile = argv[2];
+        bool dry_run = false;
+        for (int i = 3; i < argc; ++i) {
+            if (arg_eq(argv[i], L"--dry-run")) {
+                dry_run = true;
+            }
+        }
+
+        // Elevation requirement: only real apply requires elevation
+        if (!dry_run && !elevation::is_elevated()) {
+            wprintf(L"Elevating to administrator rights...\n");
+            return elevation::restart_elevated(argc, argv);
+        }
+
+        auto res = apply::apply_profile(profile, os.os_mask(), dry_run);
+        apply::print_apply_result(res);
+        return res.success ? 0 : 1;
     }
 
     // ── revert ────────────────────────────────────────────────────────────────
     if (arg_eq(cmd, L"revert")) {
-        wprintf(L"revert: not yet implemented.\n");
-        return 0;
+        // Revert writes to system registry keys and requires elevation
+        if (!elevation::is_elevated()) {
+            wprintf(L"Elevating to administrator rights...\n");
+            return elevation::restart_elevated(argc, argv);
+        }
+
+        std::wstring specific_backup;
+        if (argc >= 3 && argv[2][0] != L'-') {
+            specific_backup = argv[2];
+        }
+
+        auto res = apply::revert(specific_backup);
+        apply::print_revert_result(res);
+        return res.success ? 0 : 1;
     }
 
     // ── selftest ──────────────────────────────────────────────────────────────

@@ -39,6 +39,8 @@ set(SOURCES
     src/scan.cpp
     src/backup.cpp
     src/preview.cpp
+    src/elevation.cpp
+    src/apply.cpp
 )
 
 # Console subsystem: CLI + interactive menu (no WIN32 flag).
