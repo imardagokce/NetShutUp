@@ -4,19 +4,37 @@ cmake_minimum_required(VERSION 3.16)
 # Tests must NEVER write to real system registry keys.
 # All registry interaction uses the sandbox key:
 #   HKEY_CURRENT_USER\Software\NetShutUp-Test
-#
-# This CMakeLists.txt will grow as modules are added.
 
-# Placeholder test to verify the build pipeline works end-to-end.
+# Shared sources needed by multiple tests (no main.cpp).
+set(LEGACY_LIB_SOURCES
+    ${PROJECT_SOURCE_DIR}/src/registry.cpp
+    ${PROJECT_SOURCE_DIR}/src/catalog.cpp
+    ${PROJECT_SOURCE_DIR}/src/version.cpp
+    ${PROJECT_SOURCE_DIR}/src/scan.cpp
+)
+
+# Common settings applied to every test target.
+function(configure_test target)
+    target_include_directories(${target} PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_definitions(${target} PRIVATE
+        _WIN32_WINNT=0x0601 WINVER=0x0601
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    if(MSVC)
+        set_target_properties(${target} PROPERTIES
+            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        target_compile_options(${target} PRIVATE /W4 /utf-8)
+    endif()
+endfunction()
+
+# ── test_placeholder ─────────────────────────────────────────────────────────
 add_executable(test_placeholder test_placeholder.cpp)
-target_include_directories(test_placeholder PRIVATE ${PROJECT_SOURCE_DIR}/src)
-target_compile_definitions(test_placeholder PRIVATE
-    _WIN32_WINNT=0x0601 WINVER=0x0601
-    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-
-if(MSVC)
-    set_target_properties(test_placeholder PROPERTIES
-        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
-
+configure_test(test_placeholder)
 add_test(NAME placeholder COMMAND test_placeholder)
+
+# ── test_registry ─────────────────────────────────────────────────────────────
+add_executable(test_registry
+    test_registry.cpp
+    ${LEGACY_LIB_SOURCES}
+)
+configure_test(test_registry)
+add_test(NAME registry COMMAND test_registry)

@@ -34,9 +34,13 @@ endif()
 set(SOURCES
     src/main.cpp
     src/version.cpp
+    src/registry.cpp
+    src/catalog.cpp
+    src/scan.cpp
 )
 
-add_executable(netshutup-legacy WIN32 ${SOURCES})
+# Console subsystem: CLI + interactive menu (no WIN32 flag).
+add_executable(netshutup-legacy ${SOURCES})
 
 target_include_directories(netshutup-legacy PRIVATE src)
 
