@@ -15,6 +15,7 @@ For the Modern line (Windows 10/11), see the `main` branch changelog.
   `std::counting_semaphore`) remain banned project-wide; noted in ADR-001.
 
 ### Added
+- Encrypted DNS building blocks (stages 7a-7c): provider chain and `dns.cfg`, fail-over state machine, DoH (WinHTTP) and DoT (Schannel) clients, local UDP/TCP DNS server, service host (`--dns-service`), `dns-serve` developer command. Not wired into `apply` yet (stage 7d). Design: `docs/design/2026-11-18-legacy-dns-stub.md`.
 - Windows Firewall tier 1: `firewall.h/cpp` (`INetFwPolicy2`, read-back verification, third-party firewall skip via Security Center), `store.h/cpp` (single registry/firewall read-write path), six `firewall.*` catalog entries in all profiles, `Scope::FIREWALL`, `test_firewall`. Design: `docs/design/2026-11-18-legacy-firewall-6a.md`.
 - `docs/design/ADR-001-legacy-language-selection.md` — language and runtime decision recorded (C++20 / Win32 toolchain with Windows 7 STL restrictions).
 - `docs/compatibility-matrix.md` updated to reflect C++/Win32 selection.

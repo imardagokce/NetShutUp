@@ -166,6 +166,21 @@ Güvenlik ağına kart DNS dökümü eklenir.
   A-DoT'a geçer; çalışan yöntem hatırlandığı için sonraki sorgular doğrudan DoT'tan başlar).
 - Win7'de bu sonuçlar tekrarlanmadı; TLS 1.2 / kök sertifika / IP-SAN riskleri duruyor.
 
+## 7c: yerel sunucu ve servis (kodlandı)
+
+- `dns_server`: UDP + TCP dinleyici (8 UDP işçisi, TCP için kısa ömürlü iş parçacığı, en çok 32 bağlantı),
+  her sorgu `forward()` zincirinden geçer. UDP yanıtı 512 bayttan büyükse `TC` ile kesilir, istemci TCP'den tam yanıtı alır.
+  Port doluysa "port N is already in use" der ve hiçbir şey açık bırakmaz.
+- `dns_plain`: yalnızca eski DNS'e düşme için düz UDP (+ TC olursa TCP).
+- `dns_status` / `dns_service`: `dns.status` dosyası (5 sn'de bir, geçici dosya + yer değiştirme), SCM girişi
+  (`netshutup-legacy --dns-service`, `127.0.0.1:53`), geliştirici komutu `dns-serve [--bind ip] [--port n] [--config yol]`.
+- `Failover` iş parçacığı güvenli yapıldı (dahili mutex).
+- **Canlı deneme (Win11, Privacy zinciri, bu makine):** `Resolve-DnsName` ve `nslookup` ile `127.0.0.2:53` üzerinden
+  yanıtlar doğru döndü; ham UDP/TCP istemcileriyle A/AAAA/PTR/NXDOMAIN/EDNS de doğru. Quad9 DoH hızla başarısız olup
+  Quad9 DoT ile çözüldü (ilk sorgu ~0,1 sn). Not: Windows `nslookup -port=...` bu sunucuyla çalışmadı
+  (istemci tarafı sorunu gibi görünüyor; standart 53. port çalışıyor, nedeni araştırılmadı).
+- Servis hesabı için `%ProgramData%\NetShutUp` yazma izni (durum dosyası) **7d'de** verilecek.
+
 ## Riskler
 
 - Win7'de TLS 1.2 ve kök sertifikalar doğrulanmadı; IP SAN'lı sertifika doğrulaması
