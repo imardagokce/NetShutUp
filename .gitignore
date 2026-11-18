@@ -431,3 +431,6 @@ CLAUDE.md
 
 # Rust build output
 target/
+
+# graphify
+graphify-out/
