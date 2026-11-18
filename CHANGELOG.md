@@ -12,3 +12,5 @@ For the Modern line (Windows 10/11), see the `main` branch changelog.
 ### Added
 - `docs/design/ADR-001-legacy-language-selection.md` — language and runtime decision recorded (C++17 / Win32).
 - `docs/compatibility-matrix.md` updated to reflect C++/Win32 selection.
+- `legacy/` project skeleton: CMake build system, application manifest, OS version detection (`RtlGetVersion`), placeholder entry point, test harness.
+- `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` — legacy-adapted project documentation.
