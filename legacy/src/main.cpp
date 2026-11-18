@@ -9,6 +9,7 @@
 #include "elevation.h"
 #include "apply.h"
 #include "menu.h"
+#include "selftest.h"
 
 // ── Usage ─────────────────────────────────────────────────────────────────────
 
@@ -150,8 +151,7 @@ int wmain(int argc, wchar_t* argv[]) {
 
     // ── selftest ──────────────────────────────────────────────────────────────
     if (arg_eq(cmd, L"selftest")) {
-        wprintf(L"selftest: not yet implemented.\n");
-        return 0;
+        return selftest::cmd_selftest(os, argc, argv);
     }
 
     // Unknown command

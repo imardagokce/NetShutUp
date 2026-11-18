@@ -16,6 +16,9 @@ set(LEGACY_LIB_SOURCES
     ${PROJECT_SOURCE_DIR}/src/elevation.cpp
     ${PROJECT_SOURCE_DIR}/src/apply.cpp
     ${PROJECT_SOURCE_DIR}/src/adapters.cpp
+    ${PROJECT_SOURCE_DIR}/src/selftest_mask.cpp
+    ${PROJECT_SOURCE_DIR}/src/selftest_report.cpp
+    ${PROJECT_SOURCE_DIR}/src/selftest_runner.cpp
 )
 
 # Common settings applied to every test target.
@@ -76,3 +79,11 @@ add_executable(test_adapters
 configure_test(test_adapters)
 target_link_libraries(test_adapters PRIVATE iphlpapi)
 add_test(NAME adapters COMMAND test_adapters)
+
+# ── selftest tests ────────────────────────────────────────────────────────────
+foreach(t mask report runner)
+    add_executable(test_selftest_${t} test_selftest_${t}.cpp ${LEGACY_LIB_SOURCES})
+    configure_test(test_selftest_${t})
+    target_link_libraries(test_selftest_${t} PRIVATE iphlpapi)
+    add_test(NAME selftest_${t} COMMAND test_selftest_${t})
+endforeach()

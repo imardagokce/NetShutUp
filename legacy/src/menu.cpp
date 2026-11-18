@@ -1,6 +1,7 @@
 // menu.cpp — Interactive Win32 console menu implementation for NetShutUp Legacy
 
 #include "menu.h"
+#include "selftest.h"
 #include "scan.h"
 #include "preview.h"
 #include "apply.h"
@@ -76,6 +77,7 @@ static const std::vector<MenuItem> k_menu_items = {
     { L"Apply: Privacy Profile",     L"Disable LLMNR, CEIP telemetry, and WER" },
     { L"Apply: Performance Profile", L"Remove multimedia network throttling" },
     { L"Revert Last Change",         L"Undo changes from the most recent backup" },
+    { L"Self-test (for testers)",    L"Test every profile and write a report" },
     { L"Exit",                       L"Quit NetShutUp Legacy" }
 };
 
@@ -114,8 +116,8 @@ static NavAction read_nav_key(HANDLE hIn, int& selected_index, int max_index) {
             return NavAction::ESCAPE;
         }
 
-        // Direct number selection (1-7)
-        if (ch >= L'1' && ch <= L'7') {
+        // Direct number selection (1-8)
+        if (ch >= L'1' && ch <= L'8') {
             int idx = ch - L'1';
             if (idx <= max_index) {
                 selected_index = idx;
@@ -306,6 +308,52 @@ static void do_revert(HANDLE hIn, HANDLE hOut) {
     wait_for_key(hIn, hOut);
 }
 
+static void do_selftest(HANDLE hIn, HANDLE hOut, const OsVersion& os) {
+    clear_screen(hOut);
+    set_color(hOut, COLOR_CYAN);
+    wprintf(L"NetShutUp Legacy -- Self-test (for testers)\n");
+    wprintf(L"======================================================================\n\n");
+    set_color(hOut, COLOR_DEFAULT);
+
+    wprintf(L"Applies and reverts every profile one by one (a minute or two).\n"
+            L"Network may drop briefly; everything is reverted; backups are kept.\n"
+            L"Collects hardware/network facts WITHOUT personal identifiers into a\n"
+            L"local report file. Nothing is sent anywhere.\n\n");
+    set_color(hOut, COLOR_WHITE_BOLD);
+    wprintf(L"Run the self-test now? [y/N]: ");
+    set_color(hOut, COLOR_DEFAULT);
+
+    FlushConsoleInputBuffer(hIn);
+    INPUT_RECORD rec;
+    DWORD read_count = 0;
+    bool confirmed = false;
+    while (ReadConsoleInputW(hIn, &rec, 1, &read_count)) {
+        if (rec.EventType == KEY_EVENT && rec.Event.KeyEvent.bKeyDown) {
+            wchar_t ch = rec.Event.KeyEvent.uChar.UnicodeChar;
+            if (ch == L'y' || ch == L'Y') { confirmed = true; break; }
+            if (ch == L'n' || ch == L'N' || rec.Event.KeyEvent.wVirtualKeyCode == VK_ESCAPE ||
+                rec.Event.KeyEvent.wVirtualKeyCode == VK_RETURN) break;
+        }
+    }
+
+    if (!confirmed) {
+        wprintf(L"\nSelf-test cancelled. No changes were made.\n");
+        wait_for_key(hIn, hOut);
+        return;
+    }
+
+    wprintf(L"\n");
+    wchar_t* argv[] = {
+        const_cast<wchar_t*>(L"netshutup-legacy"),
+        const_cast<wchar_t*>(L"selftest"),
+        const_cast<wchar_t*>(L"--yes"),
+        const_cast<wchar_t*>(L"--ignore-os")
+    };
+    // Not elevated: cmd_selftest relaunches itself elevated (with --pause).
+    selftest::cmd_selftest(os, 4, argv);
+    wait_for_key(hIn, hOut);
+}
+
 // ── Main Loop ─────────────────────────────────────────────────────────────────
 
 int run(const OsVersion& os) {
@@ -374,7 +422,10 @@ int run(const OsVersion& os) {
                 case 5: // Revert
                     do_revert(hIn, hOut);
                     break;
-                case 6: // Exit
+                case 6: // Self-test
+                    do_selftest(hIn, hOut, os);
+                    break;
+                case 7: // Exit
                     running = false;
                     break;
             }
