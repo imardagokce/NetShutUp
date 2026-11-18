@@ -56,7 +56,7 @@ The Privacy profile can also ask about four optional firewall items, one questio
 
 ## Quick start
 
-**Testers:** once the first pre-release is published, download the zip from the [Releases page](https://github.com/imardagokce/NetShutUp/releases) (check the `.sha256`; the `.exe` is not code-signed, so SmartScreen may warn). Or build from source (a few minutes, Rust required):
+**Testers:** download the zip of the [`0.1.0-alpha.1` pre-release](https://github.com/imardagokce/NetShutUp/releases/tag/v0.1.0-alpha.1) from the [Releases page](https://github.com/imardagokce/NetShutUp/releases) (check the `.sha256`; the `.exe` is not code-signed, so SmartScreen may warn). Or build from source (a few minutes, Rust required):
 
 ```sh
 git clone https://github.com/imardagokce/NetShutUp.git
@@ -84,7 +84,7 @@ netshutup-modern selftest              Test every profile for real and write a r
 | | |
 |---|---|
 | Windows 10 / 11 | Everything except encrypted DNS works on both. Encrypted DNS needs **Windows 11** (build 22000+); on Windows 10 the DNS step is skipped and your DNS is not touched. |
-| Windows 7 / 8 / 8.1 | Not supported by this line. A separate **Legacy** line is planned on the [`legacy`](https://github.com/imardagokce/NetShutUp/tree/legacy) branch (so far only planning notes, no code). |
+| Windows 7 / 8 / 8.1 | Not supported by this line. A separate **Legacy** line (C++, independent codebase) is in development on the [`legacy`](https://github.com/imardagokce/NetShutUp/tree/legacy) branch and is waiting for testing on real Windows 7/8/8.1 machines. |
 
 ## Safety first
 
@@ -126,7 +126,7 @@ Found a security problem? Please use the private route described in [`SECURITY.m
 - [x] DNS-over-TLS as a second encrypted DNS method (experimental, tried when DoH does not work)
 - [x] Windows Firewall base tier for all profiles (on, inbound blocked by default; skipped when another firewall is registered)
 - [x] Windows Firewall strict tier (Privacy profile: four optional items, each asked separately, default No)
-- [ ] First alpha release (`0.1.0-alpha.1`) with a prebuilt `.exe` (prepared; published when testing is ready)
+- [x] First alpha release (`0.1.0-alpha.1`) with a prebuilt `.exe` (published as a pre-release; the strict firewall tier is on `main` only until the next build)
 - [ ] Advanced mode: switch individual settings on and off
 - [ ] Graphical interface
 
@@ -135,7 +135,7 @@ Found a security problem? Please use the private route described in [`SECURITY.m
 ```text
 modern/    Rust application for Windows 10/11 (this branch, main)
 docs/      Design notes, roadmap and compatibility matrix
-legacy     Planned, separate branch for Windows 7/8/8.1 (independent codebase; planning notes only so far)
+legacy     Separate branch for Windows 7/8/8.1 (independent C++ codebase, in development, awaiting testing)
 ```
 
 ## Contributing
