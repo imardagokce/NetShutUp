@@ -91,6 +91,7 @@ The rules the code is built around (and tests enforce):
 4. After a profile that changes DNS, internet access is checked; if it does not work, DNS is put back as it was.
 5. Settings are only written for physical Ethernet and Wi-Fi adapters; virtual adapters, VPNs and tunnels are left alone.
 6. Nothing leaves your computer.
+7. The self-test exports the relevant registry keys and creates a System Restore point before it changes anything, and writes any problem into its report.
 
 ## Help us test
 
@@ -117,7 +118,7 @@ Found a security problem? Please use the private route described in [`SECURITY.m
 - [x] Interactive terminal menu
 - [x] DNS provider with encrypted DNS (DoH), real-lookup trial and automatic fallback
 - [x] Self-test mode with a masked report
-- [ ] DNS-over-TLS as a second encrypted DNS method
+- [x] DNS-over-TLS as a second encrypted DNS method (experimental, tried when DoH does not work)
 - [ ] Windows Firewall baseline for all profiles
 - [ ] First alpha release (`0.1.0-alpha.1`) with a prebuilt `.exe`
 - [ ] Advanced mode: switch individual settings on and off

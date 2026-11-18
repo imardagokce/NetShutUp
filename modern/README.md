@@ -12,7 +12,7 @@ The Modern product line: a single-`.exe` Rust application for Windows 10/11. The
 - Previews what a profile would change, without changing anything.
 - Applies a profile after an explicit confirmation, saving a backup first.
 - Reverts the most recent apply from that backup.
-- Points every Ethernet and Wi-Fi adapter at a DNS provider (Quad9, Cloudflare or Google, depending on the profile) with encrypted DNS (DoH) required, checks with real lookups that it works, tries the next provider if not, and puts your old DNS back if nothing works. Needs Windows 11.
+- Points every Ethernet and Wi-Fi adapter at a DNS provider (Quad9, Cloudflare or Google, depending on the profile) with encrypted DNS (DoH) required, checks with real lookups that it works, tries the next provider if not, and puts your old DNS back if nothing works. After DoH, **DNS over TLS (DoT) is tried as well, but it is experimental**: Windows documents no API for it, so every change is read back and a backup of Windows' encrypted-DNS server list is kept next to the apply backup and restored by `revert`. Needs Windows 11.
 
 ## Usage
 
@@ -39,6 +39,7 @@ For people helping to test: choose **Self-test (for testers)** in the menu, or r
 
 - **Nothing is sent anywhere.** The report only exists on your computer; you send it yourself.
 - It notes a limited set of diagnostic facts that help tell a bug from a hardware or network problem: Windows version, processor and memory, computer make and model, network adapter hardware and drivers, how many VPN or virtual adapters exist, whether the computer is on a domain or has DNS/telemetry policies, registered antivirus/firewall names, and whether a proxy is set. No user name, computer name, Wi-Fi name, full IP or MAC addresses or serial numbers; addresses are masked.
+- **Safety net:** before anything is changed it exports the relevant registry keys to `%ProgramData%\NetShutUp\reg-backups` and creates a System Restore point (if System Protection is on and no point was made in the last 24 hours; otherwise that is noted in the report). Any problem is written into the report.
 - If it is interrupted, the menu warns you and **Revert last change** puts everything back.
 - Attach both report files to a new issue using the **Test report** form.
 
@@ -67,7 +68,6 @@ The C runtime is linked statically, so the release `.exe` runs without extra DLL
 
 Planned for `0.1.0-alpha.1`, see [`docs/design/2026-11-16-alpha-release.md`](../docs/design/2026-11-16-alpha-release.md):
 
-- DNS over TLS (DoT) as a second encrypted DNS method, tried when DoH does not work
 - Windows Firewall baseline
 
 Later: per-setting control (Advanced Mode) and a GUI.
