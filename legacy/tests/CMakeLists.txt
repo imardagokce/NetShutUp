@@ -21,6 +21,9 @@ set(LEGACY_LIB_SOURCES
     ${PROJECT_SOURCE_DIR}/src/selftest_runner.cpp
     ${PROJECT_SOURCE_DIR}/src/firewall.cpp
     ${PROJECT_SOURCE_DIR}/src/store.cpp
+    ${PROJECT_SOURCE_DIR}/src/dns_config.cpp
+    ${PROJECT_SOURCE_DIR}/src/dns_failover.cpp
+    ${PROJECT_SOURCE_DIR}/src/dns_packet.cpp
 )
 
 # Common settings applied to every test target.
@@ -96,3 +99,11 @@ add_executable(test_firewall test_firewall.cpp ${LEGACY_LIB_SOURCES})
 configure_test(test_firewall)
 target_link_libraries(test_firewall PRIVATE iphlpapi)
 add_test(NAME firewall COMMAND test_firewall)
+
+# ── dns (stage 7a) ──
+foreach(t config failover packet)
+    add_executable(test_dns_${t} test_dns_${t}.cpp ${LEGACY_LIB_SOURCES})
+    configure_test(test_dns_${t})
+    target_link_libraries(test_dns_${t} PRIVATE iphlpapi)
+    add_test(NAME dns_${t} COMMAND test_dns_${t})
+endforeach()

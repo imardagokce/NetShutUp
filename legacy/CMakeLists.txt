@@ -49,6 +49,9 @@ set(SOURCES
     src/selftest.cpp
     src/firewall.cpp
     src/store.cpp
+    src/dns_config.cpp
+    src/dns_failover.cpp
+    src/dns_packet.cpp
 )
 
 # Console subsystem: CLI + interactive menu (no WIN32 flag).

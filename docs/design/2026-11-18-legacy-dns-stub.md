@@ -1,6 +1,6 @@
 # Legacy — Şifreli DNS (yerel DoH çözücü)
 
-Durum: **taslak, Arda'nın onayını bekliyor; kod yok** · 2026-11-18
+Durum: **Arda onayladı (2026-11-18); 7a kodlanıyor**
 Karşılığı: `main` dalında `2026-11-17-dns-doh-5a.md` (Windows 10/11, Windows'un kendi DoH'u).
 Bu belge yalnızca Windows 7 SP1 / 8 / 8.1 içindir.
 
@@ -21,7 +21,7 @@ Bu belge yalnızca Windows 7 SP1 / 8 / 8.1 içindir.
 
 - Win7'de yerel DoH desteği yok (Windows 10 2004'ten itibaren var). Win8/8.1'de de yok.
 - DoT da aynı sorunu taşır (Windows DNS istemcisi konuşmaz), yani her iki yol da yerel
-  çözücü ister. Bu yüzden v1 yalnızca **DoH**.
+  çözücü ister. Arda'nın kararı: **DoH ve DoT, sırayla** denenir (aşağıda "Zincir").
 - Win7 ön koşulları: TLS 1.2 için KB3140245 (WinHTTP `DefaultSecureProtocols`), eski kök
   sertifikalar için KB3004394 / güncel kök deposu. Hiçbiri Win7 makinede **doğrulanmadı**;
   ilk gerçek koşu sanal makinede.
@@ -38,7 +38,7 @@ Bu belge yalnızca Windows 7 SP1 / 8 / 8.1 içindir.
 
 ## Kapsam dışı (v1)
 
-- DoT, DNSSEC doğrulama, DNS filtreleme, kullanıcı tanımlı sağlayıcı, enterprise sağlayıcılar.
+- DNSSEC doğrulama, DNS filtreleme, kullanıcı tanımlı sağlayıcı, enterprise sağlayıcılar.
 - IPv6 DNS: v1 yalnızca IPv4 DNS'i `127.0.0.1` yapar (modern hat ile aynı sınır). Yönlendiriciden
   gelen IPv6 DNS şifresiz kalabilir; Privacy'de not düşülür.
 - Önbellek: v1'de yok (ilk sürümü basit tutmak için). Gecikme ölçülürse eklenir.
@@ -100,15 +100,24 @@ Bu belge yalnızca Windows 7 SP1 / 8 / 8.1 içindir.
 5. Kartların DNS'i `127.0.0.1` yapılır; internet ve çözme yeniden doğrulanır.
 6. Bir adım başarısızsa: kartları eski haline getir, servisi durdur/sil, dosyayı sil.
 
-### Çalışma sırasında hata
+### Zincir ve çalışma sırasında hata (Arda'nın kararı, 2026-11-18)
 
-- Servis her sorguyu sırayla üst sunuculara dener. **Varsayılan (Arda'ya soruluyor):**
-  tüm DoH üst sunucuları ardışık N kez başarısızsa servis, kayıtlı **eski DNS'e** geçer
-  (internet kesilmez), bunu `%ProgramData%\NetShutUp\dns.status` dosyasına yazar ve DoH
-  yeniden çalışınca şifreliye döner. Alternatif: şifreli kalıp çözmeyi reddetmek (daha gizli,
-  ama ağ DoH'u engellerse internet gider).
-- `netshutup-legacy dns-status`: servis çalışıyor mu, şu an şifreli mi yoksa eski DNS'e mi
-  düşmüş, son hata, hangi sağlayıcı.
+Modern hat ile aynı mantık: (sağlayıcı, yöntem) çiftleri sırayla denenir:
+**A-DoH → A-DoT → B-DoH → B-DoT → eski DNS**. Sağlayıcı sırası profile göre (Privacy: Quad9,
+Cloudflare; Recommended: Cloudflare, Google; Performance: ölçümle hızlı olan önce). Hiçbiri
+çalışmazsa **sormadan eski DNS'e dönülür** ve kullanıcı bilgilendirilir.
+
+- **Apply anında:** zincir sırayla denenir; ilk çalışan yöntemle kurulum yapılır. Hiçbiri
+  çalışmazsa hiçbir şey kurulmaz, eski DNS kalır.
+- **Çalışma sırasında:** servis her sorguyu zincir sırasıyla dener (son çalışan yöntemden
+  başlayarak). Zincirin tamamı art arda N tur başarısız olursa (N=3, ayarlanabilir) servis
+  kayıtlı **eski DNS'e** geçer (internet kesilmez), durumu `dns.status`'e yazar ve her 5.
+  sorguda şifreli zinciri yeniden dener; çalışınca şifreliye döner. Eski DNS kaydı yoksa
+  şifreli kalır ve SERVFAIL döner.
+- DoT: TCP 853 üzerinde Schannel (SSPI) ile; DoH'tan ayrı aşamada yazılır (7b2). Zincir veri
+  modeli baştan her iki yöntemi taşır.
+- `netshutup-legacy dns-status`: servis çalışıyor mu, şu an hangi sağlayıcı/yöntem, şifreli mi
+  yoksa eski DNS'e mi düşmüş, son hata.
 - Servis `LocalService` altında, yalnızca gereken yetkiyle çalışır; çökerse otomatik yeniden başlar.
 
 ### Revert
@@ -137,8 +146,9 @@ Güvenlik ağına kart DNS dökümü eklenir.
 
 | Aşama | İçerik | Gerçek sistem? |
 |-------|--------|----------------|
-| 7a | `dns_core` + `dns.cfg` + testler | hayır |
+| 7a | `dns_config` (sağlayıcılar, zincir, `dns.cfg`), `dns_failover` (durum makinesi), `dns_packet` (paket yardımcıları) + testler | hayır |
 | 7b | `dns_doh` (WinHTTP) + sahte testleri | yalnızca derleme |
+| 7b2 | `dns_dot` (Schannel/SSPI, TCP 853) + sahte testleri | yalnızca derleme |
 | 7c | `dns_server` + `dns_service` (`--dns-service`) | döngü adresi testi |
 | 7d | `dns_setup`, `dns_adapters`, yan dosya yedek, `dns_apply`, önizleme/menü/CLI | **VM gerekir** |
 | 7e | selftest entegrasyonu, belgeler, `dns-status` | VM |
@@ -155,16 +165,13 @@ Güvenlik ağına kart DNS dökümü eklenir.
   genişletir: kaldırılabilirlik (`revert`) bu yüzden zorunlu ve self-test'le sınanır.
 - Kart DNS'ini `netsh` ile yazmanın Win7'de anında etkili olup olmadığı doğrulanmadı.
 
-## Claude'un kararları (itiraz edilebilir)
+## Kararlar
 
-- Yalnızca DoH; DoT yok. Önbellek yok. IPv4 DNS.
-- `.exe` kopyası `%ProgramData%\NetShutUp\bin\` altında (indirilen `.exe` silinirse DNS bozulmasın).
-- Sağlayıcılar IP ile; sağlayıcı sırası modern hat ile aynı.
-- Çalışma sırasında hata ilkesi: **eski DNS'e geç, durumu göster** (internet kesilmesin).
+Arda (2026-11-18):
+- DoH engellenirse sırayla diğer şifreli yöntemler (DoT), hiçbiri olmazsa eski DNS.
+- `.exe` kopyası `%ProgramData%\NetShutUp\bin\` altında: **uygun**.
+- IPv6 DNS v1'de **dışarıda**.
 
-## Açık sorular (Arda)
-
-1. Çalışma sırasında DoH tamamen engellenirse: **internet çalışsın diye eski DNS'e düşelim**
-   (önerilen) mı, yoksa **şifresiz sorgu asla gitmesin, internet gitse de** mi?
-2. `.exe`'nin `%ProgramData%` altına kopyalanması kabul mü?
-3. IPv6 DNS'i v1'de dışarıda bırakmak kabul mü (modern hat gibi)?
+Claude (itiraz edilebilir):
+- Önbellek v1'de yok. IPv4 DNS. Sağlayıcılar IP ile adreslenir.
+- Sağlayıcı sırası modern hat ile aynı.
