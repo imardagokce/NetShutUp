@@ -5,7 +5,7 @@ use windows::Win32::System::Registry::{HKEY, HKEY_LOCAL_MACHINE};
 
 use super::catalog::{ADAPTER_GUID, Setting, Source};
 use super::reader::{State, Value};
-use super::{interface_dns, registry, service, wmi};
+use super::{firewall, interface_dns, registry, service, wmi};
 
 pub trait Store {
     fn read(&self, setting: &Setting, adapter: Option<&str>) -> State;
@@ -53,7 +53,10 @@ impl SystemStore {
             Source::RegDword { key, .. } | Source::RegString { key, .. } => {
                 Some(self.key(key, adapter))
             }
-            Source::Service { .. } | Source::Wmi { .. } | Source::InterfaceDns => None,
+            Source::Service { .. }
+            | Source::Wmi { .. }
+            | Source::InterfaceDns
+            | Source::Firewall { .. } => None,
         }
     }
 }
@@ -96,6 +99,10 @@ impl Store for SystemStore {
                     Err(reason) => State::Unavailable(reason),
                 }
             }
+            Source::Firewall { network, field } => match firewall::read(network, field) {
+                Ok(number) => State::Value(Value::Dword(number)),
+                Err(reason) => State::Unavailable(reason),
+            },
         }
     }
 
@@ -116,6 +123,9 @@ impl Store for SystemStore {
             }
             (Source::InterfaceDns, state) => {
                 return interface_dns::write(adapter.unwrap_or_default(), state);
+            }
+            (Source::Firewall { network, field }, State::Value(Value::Dword(number @ (0 | 1)))) => {
+                return firewall::write(*network, *field, *number);
             }
             (Source::Wmi { .. }, _) => return Err("this setting is read-only".to_string()),
             _ => return Err("value type does not match the setting".to_string()),
@@ -158,6 +168,29 @@ impl Store for SystemStore {
 mod tests {
     use super::*;
     use crate::settings::catalog::{CATALOG, Scope};
+
+    #[test]
+    fn every_firewall_setting_can_be_read() {
+        let store = SystemStore::system();
+        for setting in CATALOG.iter().filter(|s| s.id.starts_with("firewall.")) {
+            let state = store.read(setting, None);
+            assert!(matches!(state, State::Value(Value::Dword(0 | 1))), "{}: {state:?}", setting.id);
+        }
+    }
+
+    #[test]
+    fn firewall_writes_reject_other_value_types_before_touching_windows() {
+        let store = SystemStore::system();
+        let setting = crate::settings::catalog::find("firewall.public.enabled").unwrap();
+        for state in [
+            State::NotSet,
+            State::Value(Value::Text("1".to_string())),
+            State::Value(Value::Dword(2)),
+        ] {
+            let error = store.write(setting, None, &state).unwrap_err();
+            assert_eq!(error, "value type does not match the setting");
+        }
+    }
 
     #[test]
     fn every_system_setting_can_be_read() {

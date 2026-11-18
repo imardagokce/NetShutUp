@@ -3,6 +3,8 @@
 //! Profiles and backups refer to settings only by `id`, so ids must never
 //! change once released.
 
+use super::firewall::{Field, Network};
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Scope {
     System,
@@ -21,6 +23,8 @@ pub enum Source {
     InterfaceDns,
     /// Integer property of a WMI object in `ROOTStandardCimv2`.
     Wmi { class: &'static str, filter: Option<&'static str>, property: &'static str },
+    /// Windows Firewall, per network type, through COM (see `firewall`).
+    Firewall { network: Network, field: Field },
 }
 
 /// What a stock Windows installation has for a setting.
@@ -236,6 +240,54 @@ pub static CATALOG: &[Setting] = &[
         default: Some(DefaultValue::Dword(1)),
         labels: ON_OFF,
     },
+    Setting {
+        id: "firewall.domain.enabled",
+        name: "Firewall (Domain network)",
+        scope: Scope::System,
+        source: Source::Firewall { network: Network::Domain, field: Field::Enabled },
+        default: Some(DefaultValue::Dword(1)),
+        labels: &[(0, "off"), (1, "on")],
+    },
+    Setting {
+        id: "firewall.domain.inbound",
+        name: "Inbound connections (Domain network)",
+        scope: Scope::System,
+        source: Source::Firewall { network: Network::Domain, field: Field::Inbound },
+        default: Some(DefaultValue::Dword(0)),
+        labels: &[(0, "block"), (1, "allow")],
+    },
+    Setting {
+        id: "firewall.private.enabled",
+        name: "Firewall (Private network)",
+        scope: Scope::System,
+        source: Source::Firewall { network: Network::Private, field: Field::Enabled },
+        default: Some(DefaultValue::Dword(1)),
+        labels: &[(0, "off"), (1, "on")],
+    },
+    Setting {
+        id: "firewall.private.inbound",
+        name: "Inbound connections (Private network)",
+        scope: Scope::System,
+        source: Source::Firewall { network: Network::Private, field: Field::Inbound },
+        default: Some(DefaultValue::Dword(0)),
+        labels: &[(0, "block"), (1, "allow")],
+    },
+    Setting {
+        id: "firewall.public.enabled",
+        name: "Firewall (Public network)",
+        scope: Scope::System,
+        source: Source::Firewall { network: Network::Public, field: Field::Enabled },
+        default: Some(DefaultValue::Dword(1)),
+        labels: &[(0, "off"), (1, "on")],
+    },
+    Setting {
+        id: "firewall.public.inbound",
+        name: "Inbound connections (Public network)",
+        scope: Scope::System,
+        source: Source::Firewall { network: Network::Public, field: Field::Inbound },
+        default: Some(DefaultValue::Dword(0)),
+        labels: &[(0, "block"), (1, "allow")],
+    },
 ];
 
 const TCP_SETTING: &str = "MSFT_NetTCPSetting";
@@ -258,11 +310,35 @@ mod tests {
     }
 
     #[test]
+    fn firewall_settings_are_in_the_catalog() {
+        for (network, label) in [("domain", "Domain"), ("private", "Private"), ("public", "Public")] {
+            let enabled = find(&format!("firewall.{network}.enabled")).unwrap();
+            assert_eq!(enabled.name, format!("Firewall ({label} network)"));
+            assert_eq!(enabled.scope, Scope::System);
+            assert_eq!(enabled.labels, &[(0, "off"), (1, "on")]);
+            assert!(matches!(enabled.default, Some(DefaultValue::Dword(1))));
+            assert!(enabled.is_writable());
+
+            let inbound = find(&format!("firewall.{network}.inbound")).unwrap();
+            assert_eq!(inbound.name, format!("Inbound connections ({label} network)"));
+            assert_eq!(inbound.scope, Scope::System);
+            assert_eq!(inbound.labels, &[(0, "block"), (1, "allow")]);
+            assert!(matches!(inbound.default, Some(DefaultValue::Dword(0))));
+            assert!(inbound.is_writable());
+        }
+        let count = CATALOG.iter().filter(|s| s.id.starts_with("firewall.")).count();
+        assert_eq!(count, 6);
+    }
+
+    #[test]
     fn adapter_scope_matches_guid_placeholder() {
         for setting in CATALOG {
             let key = match setting.source {
                 Source::RegDword { key, .. } | Source::RegString { key, .. } => key,
-                Source::Service { .. } | Source::Wmi { .. } | Source::InterfaceDns => continue,
+                Source::Service { .. }
+                | Source::Wmi { .. }
+                | Source::InterfaceDns
+                | Source::Firewall { .. } => continue,
             };
             assert_eq!(
                 key.contains(ADAPTER_GUID),

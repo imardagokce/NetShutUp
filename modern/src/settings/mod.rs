@@ -1,6 +1,7 @@
 pub mod apply;
 pub mod backup;
 pub mod catalog;
+pub mod firewall;
 pub mod interface_dns;
 pub mod plan;
 pub mod profile;

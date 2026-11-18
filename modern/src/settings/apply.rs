@@ -211,6 +211,36 @@ mod tests {
     }
 
     #[test]
+    fn firewall_settings_apply_and_revert_exactly() {
+        let dir = temp_dir("firewall-revert");
+        let store = FakeStore::default();
+        store.seed("firewall.public.inbound", None, dword(1));
+        store.seed("firewall.private.enabled", None, dword(0));
+        store.seed("firewall.domain.enabled", None, dword(1));
+        store.seed("firewall.domain.inbound", None, dword(0));
+        let before = store.snapshot();
+
+        let targets = vec![
+            target("firewall.public.inbound", None, dword(0)),
+            target("firewall.private.enabled", None, dword(1)),
+            target("firewall.domain.enabled", None, dword(1)),
+            target("firewall.domain.inbound", None, dword(0)),
+        ];
+        let plan = plan(&store, targets);
+        assert_eq!(plan.iter().filter(|c| c.is_needed()).count(), 2, "only two differ");
+        let path = apply(&store, &dir, "test", "20261118-120000", &plan).unwrap().unwrap();
+
+        let public = catalog::find("firewall.public.inbound").unwrap();
+        let private = catalog::find("firewall.private.enabled").unwrap();
+        assert_eq!(store.read(public, None), dword(0));
+        assert_eq!(store.read(private, None), dword(1));
+
+        let saved = backup::load(&path).unwrap();
+        assert_eq!(revert(&store, &saved), Vec::<String>::new());
+        assert_eq!(store.snapshot(), before);
+    }
+
+    #[test]
     fn apply_then_revert_restores_exactly() {
         let dir = temp_dir("apply-revert");
         let store = FakeStore::default();

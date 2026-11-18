@@ -4,7 +4,13 @@
   "description": "Safe, widely useful tweaks that do not get in the way of daily use",
   "settings": [
     { "id": "dns.llmnr", "set": { "dword": 0 } },
-    { "id": "update.delivery_optimization", "set": { "dword": 0 } }
+    { "id": "update.delivery_optimization", "set": { "dword": 0 } },
+    { "id": "firewall.domain.enabled", "set": { "dword": 1 } },
+    { "id": "firewall.domain.inbound", "set": { "dword": 0 } },
+    { "id": "firewall.private.enabled", "set": { "dword": 1 } },
+    { "id": "firewall.private.inbound", "set": { "dword": 0 } },
+    { "id": "firewall.public.enabled", "set": { "dword": 1 } },
+    { "id": "firewall.public.inbound", "set": { "dword": 0 } }
   ],
   "dns": { "providers": ["cloudflare", "google"], "choose": "first_working" }
 }

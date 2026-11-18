@@ -74,7 +74,10 @@ pub enum Desired {
 impl Desired {
     fn fits(&self, source: &Source) -> bool {
         match (self, source) {
-            (Desired::Dword(_), Source::RegDword { .. } | Source::Wmi { .. }) => true,
+            (
+                Desired::Dword(_),
+                Source::RegDword { .. } | Source::Wmi { .. } | Source::Firewall { .. },
+            ) => true,
             (Desired::Text(_), Source::RegString { .. }) => true,
             (Desired::StartType(start_type), Source::Service { .. }) => {
                 matches!(*start_type, SERVICE_AUTO_START | SERVICE_DEMAND_START | SERVICE_DISABLED)
@@ -335,6 +338,31 @@ mod tests {
         let profile = parse(&with_settings(r#"{"id":"dns.llmnr","set":{"dword":0}}"#)).unwrap();
         assert!(profile.dns.is_none());
         assert!(profile.dns_targets(&["{A}".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn builtin_profiles_set_the_firewall_base_tier() {
+        for profile in builtin().unwrap() {
+            for network in ["domain", "private", "public"] {
+                for (field, value) in [("enabled", 1), ("inbound", 0)] {
+                    let id = format!("firewall.{network}.{field}");
+                    let found = profile.settings.iter().find(|a| a.id == id);
+                    let found = found.unwrap_or_else(|| panic!("{} lacks {id}", profile.id));
+                    assert_eq!(found.set, Desired::Dword(value), "{} {id}", profile.id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_firewall_setting_takes_a_dword_but_not_text() {
+        let ok = parse(&with_settings(r#"{"id":"firewall.public.enabled","set":{"dword":1}}"#));
+        assert!(ok.is_ok());
+        let error = parse(&with_settings(r#"{"id":"firewall.public.enabled","set":{"text":"1"}}"#));
+        assert_eq!(
+            error.unwrap_err(),
+            "profile t: firewall.public.enabled has a value of the wrong kind"
+        );
     }
 
     #[test]
