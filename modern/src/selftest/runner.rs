@@ -45,6 +45,12 @@ pub trait Env {
     /// The per-adapter encrypted DNS entries Windows holds (masked), to see
     /// whether any are left behind after the run.
     fn doh_entries(&self) -> Vec<String>;
+    /// Puts back the DoT entries saved next to this backup (no-op without a
+    /// sidecar). Returns the problems found; an empty list means all is back.
+    fn restore_dot(&self, backup_path: &std::path::Path) -> Result<Vec<String>, String>;
+    /// Windows' global encrypted DNS server list for the providers' addresses,
+    /// as `"<address>:<n values or absent>"` lines, to compare start and end.
+    fn dot_entries(&self) -> Vec<String>;
     /// Starts a system restore point. The text says what happened.
     fn restore_point(&self) -> Result<String, String>;
     /// Exports the relevant registry keys to files; returns their names.
@@ -150,6 +156,7 @@ fn run_inner(
     }
     let start = snapshot(env.store(), &adapters);
     let doh_before = env.doh_entries();
+    let dot_before = env.dot_entries();
 
     say("Checking that every setting can be read...");
     let reading = reading_checks(env, profiles, &adapters, &guids, dns_ok);
@@ -198,6 +205,20 @@ fn run_inner(
         began,
     ));
     let began = Instant::now();
+    let dot_after = env.dot_entries();
+    let dot_same = dot_before == dot_after;
+    closing.push(check(
+        "closing.dot_entries",
+        "Windows' DoT/DoH server list is as it was",
+        pass_or_fail(dot_same),
+        &if dot_same {
+            "same as at the start".to_string()
+        } else {
+            format!("before: [{}]; after: [{}]", dot_before.join(", "), dot_after.join(", "))
+        },
+        began,
+    ));
+    let began = Instant::now();
     let still_active: Vec<String> = created
         .iter()
         .filter(|path| path.exists())
@@ -223,7 +244,7 @@ fn run_inner(
         began,
     ));
 
-    let all_restored = !revert_failed && differing.is_empty() && doh_same;
+    let all_restored = !revert_failed && differing.is_empty() && doh_same && dot_same;
     env.mark(match (all_restored, active) {
         (true, _) => Marker::Clear,
         (false, Some(path)) => Marker::Active(path),
@@ -430,6 +451,20 @@ fn reading_checks(
     checks
 }
 
+/// An Info check when DoT was tried and did not work (the labels end in "(DoT)").
+fn push_dot_info(checks: &mut Vec<Check>, labels: &[String], began: Instant) {
+    let failed: Vec<&str> = labels.iter().map(String::as_str).filter(|l| l.ends_with("(DoT)")).collect();
+    if !failed.is_empty() {
+        checks.push(check(
+            "dns.dot",
+            "DoT (experimental)",
+            Status::Info,
+            &format!("DoT was tried and did not work: {}", failed.join(", ")),
+            began,
+        ));
+    }
+}
+
 struct CycleResult {
     cycle: Cycle,
     revert_failed: bool,
@@ -547,19 +582,30 @@ fn cycle(
             &mut *say,
         );
         match &outcome {
-            Outcome::Encrypted { provider, skipped, .. } => {
+            Outcome::Encrypted { provider, method, skipped } => {
                 let detail = if skipped.is_empty() {
                     format!("{provider} works")
                 } else {
                     format!("{provider} works; {} did not", skipped.join(", "))
                 };
                 checks.push(check("dns.trial", "Encrypted DNS trial", Status::Pass, &detail, began));
+                if *method == dns::Method::Dot {
+                    checks.push(check(
+                        "dns.dot",
+                        "DoT (experimental)",
+                        Status::Pass,
+                        &format!("DoT (experimental) works with {provider}"),
+                        began,
+                    ));
+                } else {
+                    push_dot_info(&mut checks, skipped, began);
+                }
 
                 let began = Instant::now();
                 let want = provider::PROVIDERS
                     .iter()
                     .find(|candidate| candidate.name == provider)
-                    .map(|candidate| candidate.state());
+                    .map(|candidate| dns::state_for(candidate, *method));
                 let dns_setting = catalog::find(plan::DNS_SETTING);
                 let bad: Vec<String> = match (want, dns_setting) {
                     (Some(want), Some(setting)) => scope
@@ -585,6 +631,7 @@ fn cycle(
                     &format!("this network did not allow encrypted DNS (tried {}); DNS was put back", tried.join(", ")),
                     began,
                 ));
+                push_dot_info(&mut checks, tried, began);
                 if !internet_ok {
                     checks.push(check(
                         "dns.internet_after_fallback",
@@ -614,7 +661,13 @@ fn cycle(
     let began = Instant::now();
     let reverted = match backup::load(&backup_path) {
         Ok(saved) => {
-            let errors = apply::revert(store, &saved);
+            let mut errors = apply::revert(store, &saved);
+            if errors.is_empty() {
+                match env.restore_dot(&backup_path) {
+                    Ok(problems) => errors = problems,
+                    Err(reason) => errors.push(reason),
+                }
+            }
             if errors.is_empty() {
                 let _ = backup::mark_reverted(&backup_path);
                 Ok(())
@@ -681,6 +734,8 @@ mod tests {
         works_for: Vec<&'static str>,
         /// Internet "breaks" while the LLMNR policy is disabled.
         break_on_llmnr: bool,
+        /// Lookups over DoH fail (plain and DoT-style entries still resolve).
+        doh_broken: bool,
         on_lookup: Option<Box<dyn Fn()>>,
     }
 
@@ -696,6 +751,11 @@ mod tests {
             let dns = catalog::find("dns.resolver").unwrap();
             match self.store.read(dns, Some(A)) {
                 State::NotSet if self.plain_works => Ok(Duration::from_millis(10)),
+                State::Value(Value::Dns(servers))
+                    if self.doh_broken && servers[0].doh.is_some() =>
+                {
+                    Err(format!("{name}: simulated DoH failure"))
+                }
                 State::Value(Value::Dns(servers))
                     if self.works_for.contains(&servers[0].address.as_str()) =>
                 {
@@ -721,6 +781,10 @@ mod tests {
         restore: Result<String, String>,
         finished: Cell<u32>,
         dot: FakeDot,
+        /// What `dot_entries` returns on successive calls (empty when used up).
+        dot_list: RefCell<std::collections::VecDeque<Vec<String>>>,
+        /// Replaces the real sidecar restore, to simulate a failing one.
+        dot_restore: Option<Result<Vec<String>, String>>,
     }
 
     /// An in-memory DoT list.
@@ -775,6 +839,15 @@ mod tests {
         fn doh_entries(&self) -> Vec<String> {
             self.doh.borrow_mut().pop_front().unwrap_or_default()
         }
+        fn dot_entries(&self) -> Vec<String> {
+            self.dot_list.borrow_mut().pop_front().unwrap_or_default()
+        }
+        fn restore_dot(&self, backup_path: &std::path::Path) -> Result<Vec<String>, String> {
+            match &self.dot_restore {
+                Some(result) => result.clone(),
+                None => crate::dns::dot::restore_sidecar(&self.dot, backup_path),
+            }
+        }
         fn restore_point(&self) -> Result<String, String> {
             self.restore.clone()
         }
@@ -794,6 +867,7 @@ mod tests {
                 plain_works: true,
                 works_for: vec!["9.9.9.9", "1.1.1.1", "8.8.8.8"],
                 break_on_llmnr: false,
+                doh_broken: false,
                 on_lookup: None,
             },
             store,
@@ -809,6 +883,8 @@ mod tests {
             restore: Ok("created".to_string()),
             finished: Cell::new(0),
             dot: FakeDot::default(),
+            dot_list: RefCell::new(Default::default()),
+            dot_restore: None,
         }
     }
 
@@ -1069,6 +1145,79 @@ mod tests {
         let check = report.closing.iter().find(|c| c.id == "closing.doh_entries").unwrap();
         assert_eq!(check.status, Status::Fail);
         assert!(!report.all_restored);
+    }
+
+    #[test]
+    fn closing_fails_when_dot_entries_differ() {
+        let env = env("selftest-dot-left");
+        env.dot_list.borrow_mut().push_back(vec!["1.1.1.1:absent".to_string()]);
+        env.dot_list.borrow_mut().push_back(vec!["1.1.1.1:2 values".to_string()]);
+
+        let report = run_it(&env);
+
+        let check = report.closing.iter().find(|c| c.id == "closing.dot_entries").unwrap();
+        assert_eq!(check.status, Status::Fail);
+        assert!(!report.all_restored);
+    }
+
+    #[test]
+    fn dot_restore_failure_fails_the_revert_check_and_keeps_the_marker_active() {
+        let mut env = env("selftest-dot-restore-fail");
+        env.resolver.doh_broken = true;
+        env.dot_restore = Some(Ok(vec!["1.1.x.x: entry differs after restoring".to_string()]));
+
+        let report = run_it(&env);
+
+        let privacy = cycle(&report, "privacy");
+        assert_eq!(status(privacy, "revert"), Status::Fail);
+        assert_eq!(report.cycles.len(), 1, "later profiles are not run");
+        assert!(!report.all_restored);
+        assert!(matches!(env.marker.borrow().last(), Some(Marker::Active(_))), "{:?}", env.marker.borrow());
+        let kept = env.dir.read_dir().unwrap().filter_map(Result::ok).any(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.ends_with(".json") && !name.contains("reverted") && !name.contains(".dot.")
+        });
+        assert!(kept, "the backup is not marked reverted");
+    }
+
+    #[test]
+    fn dot_success_is_recorded_in_its_own_check() {
+        let mut env = env("selftest-dot-ok");
+        env.resolver.doh_broken = true;
+
+        let report = run_it(&env);
+
+        let privacy = cycle(&report, "privacy");
+        assert_eq!(status(privacy, "dns.trial"), Status::Pass);
+        let dot = privacy.checks.iter().find(|c| c.id == "dns.dot").unwrap();
+        assert_eq!(dot.status, Status::Pass);
+        assert!(dot.detail.contains("DoT (experimental) works with"), "{}", dot.detail);
+        assert!(failures(&report).is_empty(), "{:?}", failures(&report));
+        assert!(report.all_restored);
+    }
+
+    #[test]
+    fn dot_that_did_not_work_is_info() {
+        let mut env = env("selftest-dot-info");
+        env.resolver.works_for = vec![];
+
+        let report = run_it(&env);
+
+        let privacy = cycle(&report, "privacy");
+        let dot = privacy.checks.iter().find(|c| c.id == "dns.dot").unwrap();
+        assert_eq!(dot.status, Status::Info);
+        assert!(dot.detail.contains("DoT was tried and did not work"), "{}", dot.detail);
+        assert!(report.all_restored);
+    }
+
+    #[test]
+    fn all_green_run_still_passes_with_the_dot_hooks() {
+        let env = env("selftest-dot-green");
+        let report = run_it(&env);
+        assert!(failures(&report).is_empty(), "{:?}", failures(&report));
+        assert!(report.all_restored);
+        assert!(report.closing.iter().any(|c| c.id == "closing.dot_entries" && c.status == Status::Pass));
+        assert!(report.cycles.iter().all(|c| c.checks.iter().all(|k| k.id != "dns.dot")));
     }
 
     #[test]

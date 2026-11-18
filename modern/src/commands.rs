@@ -400,6 +400,19 @@ fn restore_backup(
         return ExitCode::FAILURE;
     }
 
+    match dns::dot::restore_sidecar(&SystemDotBackend, backup_file) {
+        Ok(problems) if problems.is_empty() => {}
+        outcome => {
+            eprintln!("\nThe experimental DoT entries could not be fully restored:");
+            match outcome {
+                Ok(problems) => problems.iter().for_each(|problem| eprintln!("  {problem}")),
+                Err(reason) => eprintln!("  {reason}"),
+            }
+            eprintln!("The backup was kept: {}", backup_file.display());
+            return ExitCode::FAILURE;
+        }
+    }
+
     println!("\nDone: {} restored.", count(saved.entries.len(), "setting"));
     if let Err(reason) = backup::mark_reverted(backup_file) {
         // Restoring twice is harmless, but the user should know why the

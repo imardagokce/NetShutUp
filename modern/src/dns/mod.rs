@@ -143,7 +143,7 @@ fn dot_state(provider: &Provider) -> State {
     ))
 }
 
-fn state_for(provider: &Provider, method: Method) -> State {
+pub(crate) fn state_for(provider: &Provider, method: Method) -> State {
     match method {
         Method::Doh => provider.state(),
         Method::Dot => dot_state(provider),

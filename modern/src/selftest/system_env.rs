@@ -11,6 +11,7 @@ use crate::dns::dot::{DotBackend, SystemDotBackend};
 use crate::dns::resolver::SystemResolver;
 use crate::elevation;
 use crate::settings::backup;
+use crate::settings::provider;
 use crate::settings::registry;
 use crate::settings::store::{Store, SystemStore};
 use crate::version;
@@ -90,6 +91,26 @@ impl Env for SystemEnv {
             );
             for server in registry::subkeys(HKEY_LOCAL_MACHINE, &key).unwrap_or_default() {
                 entries.push(format!("{}/{server}", mask_guid(&adapter.guid)));
+            }
+        }
+        entries.sort();
+        entries
+    }
+
+    fn restore_dot(&self, backup_path: &std::path::Path) -> Result<Vec<String>, String> {
+        crate::dns::dot::restore_sidecar(&SystemDotBackend, backup_path)
+    }
+
+    fn dot_entries(&self) -> Vec<String> {
+        let mut entries = Vec::new();
+        for provider in provider::PROVIDERS {
+            for address in provider.servers {
+                let state = match SystemDotBackend.read(address) {
+                    Ok(Some(values)) => format!("{} values", values.len()),
+                    Ok(None) => "absent".to_string(),
+                    Err(reason) => format!("unreadable ({reason})"),
+                };
+                entries.push(format!("{address}:{state}"));
             }
         }
         entries.sort();

@@ -96,6 +96,27 @@ pub fn restore_all(backend: &dyn DotBackend, saved: &Saved) -> Vec<String> {
     errors
 }
 
+/// Puts back what the sidecar of `backup_path` saved. Without a sidecar there
+/// is nothing to do. The sidecar is renamed to `<stem>.dot.reverted.json` only
+/// after every entry was restored and read back as saved; otherwise the errors
+/// are returned and the file stays for another try.
+pub fn restore_sidecar(backend: &dyn DotBackend, backup_path: &Path) -> Result<Vec<String>, String> {
+    let sidecar = sidecar_path(backup_path);
+    if !sidecar.exists() {
+        return Ok(vec![]);
+    }
+    let saved = load(&sidecar)?;
+    let errors = restore_all(backend, &saved);
+    if errors.is_empty() {
+        let name = sidecar.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let stem = name.strip_suffix(".json").unwrap_or(&name);
+        let target = sidecar.with_file_name(format!("{stem}.reverted.json"));
+        std::fs::rename(&sidecar, &target)
+            .map_err(|e| format!("the DoT backup could not be marked as used: {e}"))?;
+    }
+    Ok(errors)
+}
+
 pub fn netsh_add_args(address: &str, host: &str) -> Vec<String> {
     ["dns", "add", "encryption"]
         .iter()
@@ -296,6 +317,53 @@ mod tests {
 
         let errors = restore_all(&fake, &saved);
         assert_eq!(errors, ["192.168.x.x: entry differs after restoring"]);
+    }
+
+    fn backup_with_saved(dir: &Path, fake: &Fake) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let backup = dir.join("20261117-120000.json");
+        let saved = snapshot(fake, &strings(&["1.1.1.1", "1.0.0.1"])).unwrap();
+        save(&sidecar_path(&backup), &saved).unwrap();
+        backup
+    }
+
+    #[test]
+    fn restore_sidecar_puts_entries_back_and_renames_the_file() {
+        let dir = temp_dir("dot-restore-sidecar");
+        let fake = Fake::default();
+        fake.entries.borrow_mut().insert("1.1.1.1".into(), values("a"));
+        let backup = backup_with_saved(&dir, &fake);
+        add_provider(&fake, provider::find("cloudflare").unwrap()).unwrap();
+
+        assert_eq!(restore_sidecar(&fake, &backup), Ok(vec![]));
+
+        assert_eq!(fake.read("1.1.1.1"), Ok(Some(values("a"))));
+        assert_eq!(fake.read("1.0.0.1"), Ok(None));
+        assert!(!sidecar_path(&backup).exists());
+        assert!(dir.join("20261117-120000.dot.reverted.json").exists());
+    }
+
+    #[test]
+    fn restore_sidecar_without_a_file_is_a_no_op() {
+        let dir = temp_dir("dot-restore-none");
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = Fake::default();
+        assert_eq!(restore_sidecar(&fake, &dir.join("x.json")), Ok(vec![]));
+    }
+
+    #[test]
+    fn restore_sidecar_failure_keeps_the_file() {
+        let dir = temp_dir("dot-restore-fail");
+        let fake = Fake { restore_does_nothing: true, ..Fake::default() };
+        fake.entries.borrow_mut().insert("1.1.1.1".into(), values("a"));
+        let backup = backup_with_saved(&dir, &fake);
+        add_provider(&fake, provider::find("cloudflare").unwrap()).unwrap();
+
+        let errors = restore_sidecar(&fake, &backup).unwrap();
+
+        assert!(!errors.is_empty());
+        assert!(sidecar_path(&backup).exists());
+        assert!(!dir.join("20261117-120000.dot.reverted.json").exists());
     }
 
     #[test]
