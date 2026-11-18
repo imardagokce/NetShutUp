@@ -51,6 +51,7 @@ static void expect_provider(const wchar_t* id, const wchar_t* primary,
     EXPECT(wstr_eq(p->ipv4_secondary, secondary));
     EXPECT(wstr_eq(p->doh_url, doh));
     EXPECT_EQ(p->dot_port, 853);
+    EXPECT(std::wstring(p->dot_host).size() > 3);
 }
 
 static void test_provider_table() {

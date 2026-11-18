@@ -18,6 +18,7 @@ struct Provider {
     const wchar_t* ipv4_primary;
     const wchar_t* ipv4_secondary;
     const wchar_t* doh_url;        // IP-literal URL, e.g. L"https://1.1.1.1/dns-query"
+    const wchar_t* dot_host;       // TLS server name checked by Schannel (we connect by IP)
     unsigned short dot_port;       // 853
 };
 

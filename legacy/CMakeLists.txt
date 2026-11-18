@@ -54,6 +54,8 @@ set(SOURCES
     src/dns_packet.cpp
     src/dns_forward.cpp
     src/dns_doh.cpp
+    src/dns_frame.cpp
+    src/dns_dot.cpp
 )
 
 # Console subsystem: CLI + interactive menu (no WIN32 flag).
@@ -63,7 +65,7 @@ target_include_directories(netshutup-legacy PRIVATE src)
 
 # Link ntdll for RtlGetVersion (loaded at runtime via GetProcAddress,
 # but we still declare the import so the linker resolves the module handle)
-target_link_libraries(netshutup-legacy PRIVATE ntdll iphlpapi shell32 ole32 oleaut32 wbemuuid winhttp)
+target_link_libraries(netshutup-legacy PRIVATE ntdll iphlpapi shell32 ole32 oleaut32 wbemuuid winhttp ws2_32 secur32)
 
 # ── Application manifest ─────────────────────────────────────────────────────
 # Sets the subsystem and declares Windows 7 compatibility.

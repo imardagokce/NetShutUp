@@ -10,9 +10,9 @@ namespace netshutup::dns {
 namespace {
 
 const Provider kProviders[] = {
-    {L"cloudflare", L"Cloudflare", L"1.1.1.1", L"1.0.0.1", L"https://1.1.1.1/dns-query", 853},
-    {L"google",     L"Google",     L"8.8.8.8", L"8.8.4.4", L"https://8.8.8.8/dns-query", 853},
-    {L"quad9",      L"Quad9",      L"9.9.9.9", L"149.112.112.112", L"https://9.9.9.9/dns-query", 853},
+    {L"cloudflare", L"Cloudflare", L"1.1.1.1", L"1.0.0.1", L"https://1.1.1.1/dns-query", L"one.one.one.one", 853},
+    {L"google",     L"Google",     L"8.8.8.8", L"8.8.4.4", L"https://8.8.8.8/dns-query", L"dns.google", 853},
+    {L"quad9",      L"Quad9",      L"9.9.9.9", L"149.112.112.112", L"https://9.9.9.9/dns-query", L"dns.quad9.net", 853},
 };
 
 constexpr const char* kHeader = "NETSHUTUP_DNS_V1";

@@ -153,6 +153,19 @@ Güvenlik ağına kart DNS dökümü eklenir.
 | 7d | `dns_setup`, `dns_adapters`, yan dosya yedek, `dns_apply`, önizleme/menü/CLI | **VM gerekir** |
 | 7e | selftest entegrasyonu, belgeler, `dns-status` | VM |
 
+## Canlı doğrulama (2026-11-18, Windows 11 geliştirme makinesi)
+
+`tests/manual_dns_probe.exe` (ctest'te değil, elle) her sağlayıcıya DoH ve DoT ile birer
+`example.com` sorgusu atar:
+
+- Cloudflare DoH ✅, DoT ✅ · Google DoH ✅, DoT ✅ · Quad9 DoT ✅ (bağlantı yeniden kullanımı dahil).
+- **Quad9 DoH ❌:** HTTP 505 (HTTP sürümü desteklenmiyor). WinHTTP'nin HTTP/1.1'i reddediliyor;
+  büyük olasılıkla Quad9 yalnızca HTTP/2 konuşuyor (HTTP/2'li bir istemciyle doğrulanmadı).
+  WinHTTP'de HTTP/2 yalnızca Windows 10 1607+; Win7/8'de yok. Sonuç: legacy'de **Quad9 DoH
+  çalışmaz, zincir Quad9 DoT'a düşer** (Privacy zinciri bu yüzden A-DoH'ta hızlıca başarısız olup
+  A-DoT'a geçer; çalışan yöntem hatırlandığı için sonraki sorgular doğrudan DoT'tan başlar).
+- Win7'de bu sonuçlar tekrarlanmadı; TLS 1.2 / kök sertifika / IP-SAN riskleri duruyor.
+
 ## Riskler
 
 - Win7'de TLS 1.2 ve kök sertifikalar doğrulanmadı; IP SAN'lı sertifika doğrulaması

@@ -26,12 +26,14 @@ set(LEGACY_LIB_SOURCES
     ${PROJECT_SOURCE_DIR}/src/dns_packet.cpp
     ${PROJECT_SOURCE_DIR}/src/dns_forward.cpp
     ${PROJECT_SOURCE_DIR}/src/dns_doh.cpp
+    ${PROJECT_SOURCE_DIR}/src/dns_frame.cpp
+    ${PROJECT_SOURCE_DIR}/src/dns_dot.cpp
 )
 
 # Common settings applied to every test target.
 function(configure_test target)
     target_include_directories(${target} PRIVATE ${PROJECT_SOURCE_DIR}/src)
-    target_link_libraries(${target} PRIVATE ole32 oleaut32 wbemuuid winhttp)
+    target_link_libraries(${target} PRIVATE ole32 oleaut32 wbemuuid winhttp ws2_32 secur32)
     target_compile_definitions(${target} PRIVATE
         _WIN32_WINNT=0x0601 WINVER=0x0601
         UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -103,9 +105,14 @@ target_link_libraries(test_firewall PRIVATE iphlpapi)
 add_test(NAME firewall COMMAND test_firewall)
 
 # ── dns (stage 7a) ──
-foreach(t config failover packet forward doh)
+foreach(t config failover packet forward doh frame dot)
     add_executable(test_dns_${t} test_dns_${t}.cpp ${LEGACY_LIB_SOURCES})
     configure_test(test_dns_${t})
     target_link_libraries(test_dns_${t} PRIVATE iphlpapi)
     add_test(NAME dns_${t} COMMAND test_dns_${t})
 endforeach()
+
+# Manual live probe (NOT a ctest): sends one real DNS query per provider/method.
+add_executable(manual_dns_probe manual_dns_probe.cpp ${LEGACY_LIB_SOURCES})
+configure_test(manual_dns_probe)
+target_link_libraries(manual_dns_probe PRIVATE iphlpapi)
