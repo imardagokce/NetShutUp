@@ -10,6 +10,7 @@
 #include "apply.h"
 #include "menu.h"
 #include "selftest.h"
+#include "dns_service.h"
 
 // ── Usage ─────────────────────────────────────────────────────────────────────
 
@@ -52,6 +53,11 @@ int wmain(int argc, wchar_t* argv[]) {
             ignore_os = true;
             break;
         }
+    }
+
+    // Started by the Service Control Manager (stage 7c); must not print or prompt.
+    if (argc >= 2 && arg_eq(argv[1], L"--dns-service")) {
+        return dns::run_service();
     }
 
     if (!os.is_supported() && !ignore_os) {
@@ -147,6 +153,19 @@ int wmain(int argc, wchar_t* argv[]) {
         auto res = apply::revert(specific_backup);
         apply::print_revert_result(res);
         return res.success ? 0 : 1;
+    }
+
+    // ── dns-serve (developer / manual test; not listed in usage) ──────────────
+    if (arg_eq(cmd, L"dns-serve")) {
+        std::wstring cfg = dns::config_path();
+        std::wstring bind_ip = L"127.0.0.1";
+        unsigned short port = 5353;
+        for (int i = 2; i + 1 < argc; ++i) {
+            if (arg_eq(argv[i], L"--config")) cfg = argv[i + 1];
+            else if (arg_eq(argv[i], L"--bind")) bind_ip = argv[i + 1];
+            else if (arg_eq(argv[i], L"--port")) port = static_cast<unsigned short>(_wtoi(argv[i + 1]));
+        }
+        return dns::run_foreground(cfg, bind_ip, port);
     }
 
     // ── selftest ──────────────────────────────────────────────────────────────

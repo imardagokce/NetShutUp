@@ -1,10 +1,12 @@
 #pragma once
 
 // dns_failover.h — deterministic upstream/legacy fail-over state machine
-// (pure, no clock, no I/O, not thread-safe: the caller serialises access).
+// (pure, no clock, no I/O). Thread-safe: every member is guarded by an internal
+// mutex, so the server's worker threads can share one instance.
 // Design: docs/design/2026-11-18-legacy-dns-stub.md ("Zincir ve çalışma sırasında hata").
 
 #include <cstddef>
+#include <mutex>
 #include <optional>
 #include <vector>
 
@@ -23,9 +25,9 @@ public:
     // has_legacy: whether an original DNS server is on record.
     Failover(std::size_t upstream_count, unsigned fail_threshold, bool has_legacy);
 
-    Mode        mode() const { return mode_; }
-    std::size_t current() const { return current_; }         // last upstream that worked
-    unsigned    failed_rounds() const { return failed_rounds_; }
+    Mode        mode() const { std::lock_guard<std::mutex> l(mu_); return mode_; }
+    std::size_t current() const { std::lock_guard<std::mutex> l(mu_); return current_; }   // last upstream that worked
+    unsigned    failed_rounds() const { std::lock_guard<std::mutex> l(mu_); return failed_rounds_; }
 
     // Plan for the next query.
     //  Encrypted mode: order = current, current+1, ... wrapping once around (all
@@ -43,6 +45,7 @@ public:
     void round_result(std::optional<std::size_t> winner);
 
 private:
+    mutable std::mutex mu_;
     std::size_t count_;
     unsigned    threshold_;
     bool        has_legacy_;

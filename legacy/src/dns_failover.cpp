@@ -15,6 +15,7 @@ Failover::Failover(std::size_t upstream_count, unsigned fail_threshold, bool has
       has_legacy_(has_legacy) {}
 
 Plan Failover::plan() {
+    std::lock_guard<std::mutex> lock(mu_);
     Plan p;
 
     if (mode_ == Mode::Encrypted) {
@@ -38,6 +39,7 @@ Plan Failover::plan() {
 }
 
 void Failover::round_result(std::optional<std::size_t> winner) {
+    std::lock_guard<std::mutex> lock(mu_);
     if (winner.has_value()) {
         if (*winner < count_) {
             current_ = *winner;

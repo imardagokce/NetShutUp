@@ -56,6 +56,10 @@ set(SOURCES
     src/dns_doh.cpp
     src/dns_frame.cpp
     src/dns_dot.cpp
+    src/dns_plain.cpp
+    src/dns_status.cpp
+    src/dns_server.cpp
+    src/dns_service.cpp
 )
 
 # Console subsystem: CLI + interactive menu (no WIN32 flag).
