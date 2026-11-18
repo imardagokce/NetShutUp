@@ -4,7 +4,7 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 
 ## [0.1.0-alpha.1] - unreleased
 
-First test build, for testers. See [`docs/releases/v0.1.0-alpha.1.md`](docs/releases/v0.1.0-alpha.1.md).
+First test build, for testers. See [`docs/release-notes/v0.1.0-alpha.1.md`](docs/release-notes/v0.1.0-alpha.1.md).
 
 ### Added
 - Profiles (Privacy, Performance, Recommended) with preview, dry-run, backup, apply and revert.

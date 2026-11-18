@@ -38,7 +38,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = "${{ github.ref_name }}"
-          $notes = "docs/releases/$tag.md"
+          $notes = "docs/release-notes/$tag.md"
           if (-not (Test-Path $notes)) { throw "Missing release notes: $notes" }
           gh release create $tag `
             "dist/NetShutUp-$tag-windows-x64.zip" `
