@@ -15,10 +15,10 @@ For the Modern line (Windows 10/11), see the `main` branch changelog.
   `std::counting_semaphore`) remain banned project-wide; noted in ADR-001.
 
 ### Added
-- `docs/design/ADR-001-legacy-language-selection.md` — language and runtime decision recorded (C++17 / Win32).
+- `docs/design/ADR-001-legacy-language-selection.md` — language and runtime decision recorded (C++20 / Win32 toolchain with Windows 7 STL restrictions).
 - `docs/compatibility-matrix.md` updated to reflect C++/Win32 selection.
-- `legacy/` project skeleton: CMake build system, application manifest, OS version detection (`RtlGetVersion`), placeholder entry point, test harness.
-- `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` — legacy-adapted project documentation.
+- `legacy/` project skeleton: CMake build system (C++20, static CRT `/MT`), application manifest, OS version detection (`RtlGetVersion`), placeholder entry point, test harness.
+- `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md` — legacy-adapted project documentation updated for C++20 toolchain and active development progress.
 - `legacy/src/registry.h/cpp` — RAII registry wrapper; read, write, delete, enumerate (sandbox-safe).
 - `legacy/src/catalog.h/cpp` — Settings catalog: 6 verified Win7/8/8.1 entries across Privacy and Performance profiles.
 - `legacy/src/scan.h/cpp` — Read-only `scan` command; reads all global-scope catalog entries, reports current vs. default.

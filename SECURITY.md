@@ -3,7 +3,7 @@
 NetShutUp Legacy changes Windows network settings and asks for administrator rights
 to do so. Security reports are taken seriously.
 
-The project is **in planning** — no binary has been released yet.
+The project is **in active development** — no public release binary has been tagged yet.
 Once releases begin, only the latest commit on the `legacy` branch will be supported.
 
 ## Reporting a vulnerability

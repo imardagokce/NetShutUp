@@ -3,7 +3,7 @@
 Thank you for helping. There are three good ways to contribute.
 
 > [!NOTE]
-> This guide covers the **Legacy** branch (Windows 7/8/8.1, C++/Win32).
+> This guide covers the **Legacy** branch (Windows 7/8/8.1, C++20 / Win32).
 > For the Modern line (Windows 10/11, Rust), see the `main` branch.
 
 | I want to… | Go to |
@@ -55,20 +55,30 @@ When testing becomes available:
 
 ## Development guide
 
-> [!NOTE]
-> The codebase is not set up yet. The instructions below describe the intended workflow once the project skeleton is in place.
+### Setup and Building
 
-### Setup (planned)
+The Legacy project builds as a standalone single executable using CMake and MSVC:
 
 ```sh
 git clone https://github.com/imardagokce/NetShutUp.git
 git checkout legacy
-cd NetShutUp/legacy
-cmake --preset debug
-cmake --build build/debug
+cmake -B legacy/build -S legacy
+cmake --build legacy/build --config Release
+ctest --test-dir legacy/build -C Release --output-on-failure
 ```
 
-You will need **Visual Studio Build Tools** (MSVC) with the Windows 7 SDK, or a compatible MinGW-w64 toolchain capable of producing Win7 SP1 binaries.
+You will need **Visual Studio 2019+** or **Build Tools** (MSVC toolset supporting **C++20**) with the Windows SDK. The build automatically links the C/C++ Runtime statically (`/MT`) so the generated `.exe` runs on clean Windows 7 SP1 systems without any installed VC++ Redistributable.
+
+### C++20 Standard & Windows 7 Restrictions
+
+While the project uses **C++20** (`/std:c++20`), certain MSVC STL synchronization primitives rely internally on `WaitOnAddress`, an API that only exists in Windows 8 and later. Therefore, the following features are **strictly banned** project-wide:
+
+- `std::atomic_wait` / `std::atomic_notify_*`
+- `std::latch`
+- `std::barrier`
+- `std::counting_semaphore`
+
+See [ADR-001](docs/design/ADR-001-legacy-language-selection.md) for full rationale and allowed alternatives.
 
 ### Ground rules (these protect users)
 
@@ -85,7 +95,7 @@ You will need **Visual Studio Build Tools** (MSVC) with the Windows 7 SDK, or a 
 
 ```text
 legacy/
-  src/           application source (C++17 / Win32)
+  src/           application source (C++20 / Win32)
   profiles/      built-in profiles (embedded in the .exe)
   tests/         unit and integration tests
   CMakeLists.txt build definition

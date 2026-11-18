@@ -8,8 +8,8 @@ A single-file Windows tool that tunes network privacy and performance settings �
 
 [![License: GPL v3](https://img.shields.io/badge/license-GPL%20v3-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%207%20%7C%208%20%7C%208.1-0078D6?style=flat-square&logo=windows&logoColor=white)](#requirements)
-[![Language](https://img.shields.io/badge/language-C%2B%2B17%20%2F%20Win32-00599C?style=flat-square&logo=cplusplus&logoColor=white)](docs/design/ADR-001-legacy-language-selection.md)
-[![Status](https://img.shields.io/badge/status-planned-lightgrey?style=flat-square)](#status)
+[![Language](https://img.shields.io/badge/language-C%2B%2B20%20%2F%20Win32-00599C?style=flat-square&logo=cplusplus&logoColor=white)](docs/design/ADR-001-legacy-language-selection.md)
+[![Status](https://img.shields.io/badge/status-in%20development-orange?style=flat-square)](#status)
 [![Branch](https://img.shields.io/badge/branch-legacy-8A2BE2?style=flat-square)](https://github.com/imardagokce/NetShutUp/tree/legacy)
 
 [Features](#features) · [Profiles](#profiles) · [Quick start](#quick-start) · [Safety](#safety-first) · [Roadmap](#roadmap) · [Contributing](#contributing)
@@ -30,8 +30,8 @@ You choose a profile — **Privacy**, **Performance** or **Recommended** — and
 
 It exists because "network optimization" tips on the internet are a mixed bag: some help, some do nothing, some quietly make things worse. NetShutUp only includes tweaks whose registry path, default value and effect were checked against Microsoft's documentation.
 
-> [!WARNING]
-> **Planned — no code yet.** This branch currently contains only planning and design documents. No binary is available yet.
+> [!NOTE]
+> **Active Development (Pre-Alpha).** Core modules (`scan`, `preview`, `backup`, and registry engine) are implemented with complete sandbox unit test coverage. Full `apply` / `revert` execution and the terminal menu are currently being developed.
 
 ## Features
 
@@ -95,11 +95,13 @@ The rules the code is built around (and tests enforce):
 
 ## Roadmap
 
-- [ ] Project skeleton, CMake build system, CI pipeline
-- [ ] Windows version detection (`RtlGetVersion`), adapter enumeration
-- [ ] Settings catalog and read-only scan
-- [ ] Backup, apply and revert engine with rollback
-- [ ] Three built-in profiles with preview and dry-run
+- [x] Project skeleton, CMake build system (C++20, static CRT `/MT`)
+- [x] Real Windows version detection via `RtlGetVersion` (bypassing `GetVersionExW` shims)
+- [x] Settings catalog (verified against Microsoft documentation) and read-only `scan` command
+- [x] Verified backup engine (`.nsub` UTF-8 plain text with atomic verification and "not set" restoration)
+- [x] Built-in profile preview engine (`preview <profile>`) with change diff summary
+- [ ] Apply and revert execution engine with automatic UAC elevation
+- [ ] Physical network adapter enumeration (`GetAdaptersAddresses`)
 - [ ] Interactive terminal menu
 - [ ] Self-test mode with a masked report
 - [ ] First alpha release with a prebuilt `.exe`
@@ -107,14 +109,14 @@ The rules the code is built around (and tests enforce):
 ## Repository layout
 
 ```text
-legacy/      C++/Win32 application for Windows 7/8/8.1 (this branch)
+legacy/      C++20/Win32 application for Windows 7/8/8.1 (this branch)
 docs/        Design notes and compatibility matrix (shared documentation)
   design/    Architecture Decision Records (ADRs) — source of truth for decisions
 ```
 
 ## Status
 
-**Planned.** Language selected (C++17 / Win32, see [ADR-001](docs/design/ADR-001-legacy-language-selection.md)). No code yet. The Modern line (`main` branch) is at `v0.1.0-alpha.1`, in testing.
+**In active development (pre-alpha).** Built with **C++20** and native Win32 APIs targeting Windows 7 SP1, 8, and 8.1. Static CRT linkage ensures no external VC++ runtime DLLs are needed on target machines. `scan`, `preview`, and `backup` engines are implemented and verified with 100% passing sandbox tests. The Modern line (`main` branch) is at `v0.1.0-alpha.1`, in testing.
 
 ## Contributing
 
