@@ -28,6 +28,19 @@ Check make(const wchar_t* id, const wchar_t* title, Status st,
     return c;
 }
 
+// Adds the DNS-stage check for the last apply/revert call, if the Env reports one.
+void add_note(const Env& env, Section& sec, const wchar_t* id, const wchar_t* title) {
+    if (!env.take_note) return;
+    std::wstring note = env.take_note(env.ctx);
+    if (note.empty()) return;
+    Status st = Status::Pass;
+    const std::wstring fail = L"FAIL: ";
+    const std::wstring skip = L"SKIP: ";
+    if (note.compare(0, fail.size(), fail) == 0) { st = Status::Fail; note.erase(0, fail.size()); }
+    else if (note.compare(0, skip.size(), skip) == 0) { st = Status::Skip; note.erase(0, skip.size()); }
+    sec.checks.push_back(make(id, title, st, note));
+}
+
 } // namespace
 
 std::vector<std::wstring> diff(const Snapshot& a, const Snapshot& b) {
@@ -62,6 +75,7 @@ Report run(const Env& env, const std::vector<std::wstring>& profiles) {
 
         const std::wstring backup = ar.backup_path;
         bool need_revert = false;
+        add_note(env, sec, L"dns_apply", L"DNS stage (apply)");
 
         if (!ar.success) {
             sec.checks.push_back(make(L"apply", L"Apply profile", Status::Fail,
@@ -87,6 +101,7 @@ Report run(const Env& env, const std::vector<std::wstring>& profiles) {
             t = env.now_ms(env.ctx);
             apply::RevertResult rr = env.revert(env.ctx, backup);
             dt = env.now_ms(env.ctx) - t;
+            add_note(env, sec, L"dns_revert", L"DNS stage (revert)");
             if (!rr.success) {
                 sec.checks.push_back(make(L"revert", L"Revert from backup", Status::Fail,
                                           rr.error_message, dt));

@@ -26,6 +26,10 @@ struct Env {
     apply::RevertResult (*revert)(void* ctx, const std::wstring& backup_path);
     unsigned long       (*now_ms)(void* ctx);
     void*               ctx;
+    // Optional (may be null). Returns and clears a one-line note about the DNS stage of the
+    // LAST apply/revert call. Prefix "FAIL: " -> Fail check, "SKIP: " -> Skip check, any other
+    // non-empty text -> Pass check; empty -> no check is added.
+    std::wstring        (*take_note)(void* ctx) = nullptr;
 };
 
 // Ids whose value differs between a and b ("not set" and 0 are different).

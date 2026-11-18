@@ -28,6 +28,7 @@ struct Fake {
     std::wstring fail_apply, fail_revert;
     bool notset_becomes_zero = false;
     unsigned long clock = 0;
+    std::wstring apply_note, revert_note, pending_note;
 };
 
 static Fake* F(void* c) { return static_cast<Fake*>(c); }
@@ -42,6 +43,7 @@ static Env make_env(Fake& f) {
         apply::ApplyResult r{};
         r.profile_name = p;
         if (fk->fail_apply == p) { r.success = false; r.error_message = L"boom"; return r; }
+        fk->pending_note = fk->apply_note;
         std::wstring path = L"bk_" + std::wstring(p);
         fk->backups[path] = Snapshot(fk->state.begin(), fk->state.end());
         for (auto& [id, v] : fk->effects[p]) fk->state[id] = v;
@@ -53,6 +55,7 @@ static Env make_env(Fake& f) {
     e.revert = [](void* c, const std::wstring& path) {
         Fake* fk = F(c);
         apply::RevertResult r{};
+        fk->pending_note = fk->revert_note;
         r.backup_path = path;
         if (!fk->fail_revert.empty() && path == L"bk_" + fk->fail_revert) {
             r.success = false;
@@ -67,6 +70,7 @@ static Env make_env(Fake& f) {
         r.restored_count = fk->backups[path].size();
         return r;
     };
+    e.take_note = [](void* c) { std::wstring n = std::move(F(c)->pending_note); F(c)->pending_note.clear(); return n; };
     return e;
 }
 
@@ -121,6 +125,40 @@ static void not_set_stays_not_set() {
     EXPECT(r.all_restored && !has_fail(r));
     EXPECT(!f.state[L"a"].has_value());
 }
+static const Check* find_check(const Section& s, const std::wstring& id) {
+    for (auto& c : s.checks) if (c.id == id) return &c;
+    return nullptr;
+}
+static void dns_notes_become_checks() {
+    Fake f; f.apply_note = L"Encrypted DNS active: quad9 over dot"; f.revert_note = L"DNS restored";
+    Env e = make_env(f);
+    Report r = run(e, {L"p1"});
+    const Check* a = find_check(*sec(r, L"p1"), L"dns_apply");
+    const Check* v = find_check(*sec(r, L"p1"), L"dns_revert");
+    EXPECT(a && a->status == Status::Pass && a->detail == L"Encrypted DNS active: quad9 over dot");
+    EXPECT(v && v->status == Status::Pass);
+    EXPECT(r.all_restored && !has_fail(r));
+}
+static void dns_skip_and_fail_prefixes() {
+    Fake f; f.apply_note = L"SKIP: no internet connection; DNS left untouched"; f.revert_note = L"FAIL: adapter x";
+    Env e = make_env(f);
+    Report r = run(e, {L"p1"});
+    const Check* a = find_check(*sec(r, L"p1"), L"dns_apply");
+    const Check* v = find_check(*sec(r, L"p1"), L"dns_revert");
+    EXPECT(a && a->status == Status::Skip && a->detail == L"no internet connection; DNS left untouched");
+    EXPECT(v && v->status == Status::Fail && v->detail == L"adapter x");
+    EXPECT(has_fail(r));
+}
+static void no_note_no_check() {
+    Fake f; Env e = make_env(f);
+    Report r = run(e, {L"p1"});
+    EXPECT(find_check(*sec(r, L"p1"), L"dns_apply") == nullptr);
+    EXPECT(find_check(*sec(r, L"p1"), L"dns_revert") == nullptr);
+    Env bare = make_env(f);
+    bare.take_note = nullptr;   // an Env without the hook must keep working
+    Report r2 = run(bare, {L"p1"});
+    EXPECT(r2.all_restored);
+}
 static void diff_fn() {
     Snapshot a{{L"x", std::nullopt}}, b{{L"x", DWORD(0)}};
     EXPECT(diff(a, a).empty());
@@ -134,6 +172,9 @@ int main() {
     diff_after_revert();
     not_set_stays_not_set();
     diff_fn();
+    dns_notes_become_checks();
+    dns_skip_and_fail_prefixes();
+    no_note_no_check();
     if (g_failed) { wprintf(L"%d failure(s)\n", g_failed); return 1; }
     wprintf(L"selftest_runner: all passed\n");
     return 0;

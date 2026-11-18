@@ -8,6 +8,8 @@
 #include "preview.h"
 #include "registry.h"
 #include "store.h"
+#include "dns_apply.h"
+#include "dns_system.h"
 #include "selftest_mask.h"
 
 #include <shellapi.h>
@@ -87,7 +89,18 @@ bool is_arg(int argc, wchar_t* argv[], const wchar_t* flag) {
 struct RealCtx {
     DWORD os_mask;
     std::vector<adapters::PhysicalAdapter> nics;
+    std::wstring dns_note;   // DNS stage result of the last apply/revert (see Env::take_note)
 };
+
+// 32-bit FNV-1a of a string: DNS server lists are compared across apply/revert as one value.
+DWORD fnv1a(const std::wstring& s) {
+    DWORD h = 2166136261u;
+    for (wchar_t ch : s) {
+        h ^= static_cast<DWORD>(ch);
+        h *= 16777619u;
+    }
+    return h;
+}
 
 Snapshot real_snapshot(void* c) {
     auto* ctx = static_cast<RealCtx*>(c);
@@ -104,15 +117,63 @@ Snapshot real_snapshot(void* c) {
             }
         }
     }
+    // DNS state: our service and every physical adapter's static DNS list (empty = automatic
+    // = "not set"). Lists are normalised ("a,b") so formatting differences do not look like changes.
+    dns::RealSystem sys;
+    snap.emplace_back(L"dns.service", sys.service_installed() ? std::optional<DWORD>(1) : std::nullopt);
+    for (const auto& a : sys.adapters()) {
+        std::optional<DWORD> v;
+        if (a.static_servers && !a.static_servers->empty()) {
+            std::wstring joined;
+            for (const auto& s : *a.static_servers) joined += (joined.empty() ? L"" : L",") + s;
+            v = fnv1a(joined);
+        }
+        snap.emplace_back(L"dns.adapter." + a.guid, v);
+    }
     return snap;
 }
 
 apply::ApplyResult real_apply(void* c, const wchar_t* profile) {
-    return apply::apply_profile(profile, static_cast<RealCtx*>(c)->os_mask, false);
+    auto* ctx = static_cast<RealCtx*>(c);
+    ctx->dns_note.clear();
+    apply::ApplyResult r = apply::apply_profile(profile, ctx->os_mask, false);
+    if (r.success && !r.backup_path.empty()) {
+        // The same DNS stage as the real `apply` command (dns_flow), recorded for the report.
+        dns::RealSystem sys;
+        const std::wstring fastest = (std::wcscmp(profile, L"performance") == 0) ? sys.fastest_provider() : L"";
+        dns::DnsResult d = dns::apply_dns(profile, r.backup_path, sys, fastest);
+        switch (d.outcome) {
+            case dns::DnsOutcome::Applied: ctx->dns_note = d.message; break;
+            case dns::DnsOutcome::Skipped: ctx->dns_note = L"SKIP: " + d.message; break;
+            case dns::DnsOutcome::Failed:  ctx->dns_note = L"FAIL: " + d.message; break;
+        }
+    }
+    return r;
 }
 
-apply::RevertResult real_revert(void*, const std::wstring& path) {
-    return apply::revert(path);
+apply::RevertResult real_revert(void* c, const std::wstring& path) {
+    auto* ctx = static_cast<RealCtx*>(c);
+    ctx->dns_note.clear();
+    apply::RevertResult r = apply::revert(path);
+    dns::RealSystem sys;
+    dns::DnsRevertResult d = dns::revert_dns(path, sys);
+    if (d.had_dns) {
+        if (d.ok) {
+            ctx->dns_note = L"DNS restored";
+        } else {
+            ctx->dns_note = L"FAIL: " + d.message;
+            r.success = false;                        // makes the runner stop and print the manual command
+            r.error_message += L" DNS: " + d.message;
+        }
+    }
+    return r;
+}
+
+std::wstring real_take_note(void* c) {
+    auto* ctx = static_cast<RealCtx*>(c);
+    std::wstring n = std::move(ctx->dns_note);
+    ctx->dns_note.clear();
+    return n;
 }
 
 unsigned long real_now(void*) { return static_cast<unsigned long>(GetTickCount64()); }
@@ -179,6 +240,12 @@ Section environment_section(const OsVersion& os, const std::wstring& safety_dir)
     GetUserDefaultLocaleName(loc, LOCALE_NAME_MAX_LENGTH);
     info(L"locale", L"Locale", loc);
     info(L"elevated", L"Administrator", elevation::is_elevated() ? L"yes" : L"no");
+    {
+        dns::RealSystem dsys;
+        info(L"dns_tls12", L"TLS 1.2 for encrypted DNS", dsys.tls12_ok() ? L"available" : L"NOT available (Windows 7 needs KB3140245)");
+        info(L"dns_port53", L"Local DNS port 53", dsys.port53_free() ? L"free" : L"in use");
+        info(L"dns_service", L"DNS service", dns::service_state());
+    }
 
     auto nics = adapters::get_physical_adapters();
     std::size_t eth = 0, wifi = 0;
@@ -276,6 +343,23 @@ SafetyNet create_safety_net() {
         }
         if (!exported) { sn.error = L"netsh advfirewall export failed"; return sn; }
     }
+    // Adapter DNS before the test, as plain text for manual recovery (reg + netsh exports do not
+    // cover it in a readable form). Best effort: not having it never blocks the test.
+    {
+        std::wstring text = L"Adapter DNS before the self-test (interface index, GUID, servers):\r\n";
+        dns::RealSystem dsys;
+        for (const auto& a : dsys.adapters()) {
+            text += std::to_wstring(a.if_index) + L"  " + a.guid + L"  ";
+            if (a.static_servers) {
+                text += L"static ";
+                for (std::size_t i = 0; i < a.static_servers->size(); ++i) text += (i ? L"," : L"") + (*a.static_servers)[i];
+            } else {
+                text += L"automatic (DHCP)";
+            }
+            text += L"\r\n";
+        }
+        write_file(dir + L"\\dns-before.txt", to_utf8(text));
+    }
     sn.reg_export_ok = true;
 
     // System restore point (optional; may be disabled or throttled).
@@ -360,7 +444,7 @@ int cmd_selftest(const OsVersion& os, int argc, wchar_t* argv[]) {
         wprintf(L"Running profiles (apply -> verify -> revert -> compare)...\n");
 
         RealCtx ctx{os.os_mask(), adapters::get_physical_adapters()};
-        Env env{real_snapshot, real_apply, real_revert, real_now, &ctx};
+        Env env{real_snapshot, real_apply, real_revert, real_now, &ctx, real_take_note};
         Report loop = run(env, profiles);
         rep.total_millis = loop.total_millis;
         rep.all_restored = loop.all_restored;
