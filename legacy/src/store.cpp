@@ -21,4 +21,22 @@ bool remove(const catalog::Entry& e) {
     return registry::delete_value(e.hive, e.subkey, e.value_name);
 }
 
+std::optional<DWORD> read(const targets::Target& t) {
+    if (!t.entry) return std::nullopt;
+    if (t.entry->scope == catalog::Scope::FIREWALL) return read(*t.entry);
+    return registry::read_dword(t.entry->hive, t.subkey.c_str(), t.entry->value_name);
+}
+
+bool write(const targets::Target& t, DWORD value) {
+    if (!t.entry) return false;
+    if (t.entry->scope == catalog::Scope::FIREWALL) return write(*t.entry, value);
+    return registry::write_dword(t.entry->hive, t.subkey.c_str(), t.entry->value_name, value);
+}
+
+bool remove(const targets::Target& t) {
+    if (!t.entry) return false;
+    if (t.entry->scope == catalog::Scope::FIREWALL) return remove(*t.entry);
+    return registry::delete_value(t.entry->hive, t.subkey.c_str(), t.entry->value_name);
+}
+
 } // namespace netshutup::store

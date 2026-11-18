@@ -106,19 +106,22 @@ static std::optional<std::string> read_text_file(const std::wstring& path) {
 bool save(const std::vector<const catalog::Entry*>& entries,
           const std::wstring&                        profile_name,
           const std::wstring&                        path) {
+    // No adapter list: per-adapter entries expand to nothing and are skipped.
+    return save(targets::expand(entries, {}), profile_name, path);
+}
+
+bool save(const std::vector<targets::Target>& target_list,
+          const std::wstring&                 profile_name,
+          const std::wstring&                 path) {
     std::vector<BackupEntry> recorded;
-    recorded.reserve(entries.size());
+    recorded.reserve(target_list.size());
 
-    for (const auto* entry : entries) {
-        if (!entry) continue;
-        if (entry->scope == catalog::Scope::PER_ADAPTER) {
-            // PER_ADAPTER entries are skipped until adapter module is built
-            continue;
-        }
+    for (const auto& t : target_list) {
+        if (!t.entry) continue;
 
-        auto current = store::read(*entry);
+        auto current = store::read(t);
         BackupEntry be;
-        be.id = entry->id;
+        be.id = t.id;
         be.existed = current.has_value();
         be.value = current.value_or(0);
         recorded.push_back(be);
@@ -249,20 +252,27 @@ bool restore_with_lookup(const Backup& backup, LookupFn lookup) {
     if (!lookup) return false;
 
     for (const auto& item : backup.entries) {
-        const auto* entry = lookup(item.id.c_str());
+        // Per-adapter ids look like "<entry id>@{GUID}".
+        const auto parts = targets::split_id(item.id);
+        const auto* entry = lookup(parts.first.c_str());
         if (!entry) {
             // Setting is no longer in catalog; skip it safely.
             continue;
         }
+        const bool per_adapter = (entry->scope == catalog::Scope::PER_ADAPTER);
+        if (per_adapter == parts.second.empty()) {
+            continue;   // malformed: a GUID on a global entry, or a per-adapter entry without one
+        }
+        const targets::Target t = targets::make_target(*entry, parts.second);
 
         if (item.existed) {
             // Restore previously existing value
-            if (!store::write(*entry, item.value)) {
+            if (!store::write(t, item.value)) {
                 return false;
             }
         } else {
             // Restore "not set" state by deleting the value
-            if (!store::remove(*entry)) {
+            if (!store::remove(t)) {
                 return false;
             }
         }

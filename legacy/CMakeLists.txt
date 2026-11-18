@@ -49,6 +49,7 @@ set(SOURCES
     src/selftest.cpp
     src/firewall.cpp
     src/store.cpp
+    src/targets.cpp
     src/dns_config.cpp
     src/dns_failover.cpp
     src/dns_packet.cpp

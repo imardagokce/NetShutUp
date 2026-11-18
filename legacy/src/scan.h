@@ -11,6 +11,7 @@
 
 #include "catalog.h"
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace netshutup::scan {
@@ -24,6 +25,7 @@ enum class Status {
 
 struct Result {
     const catalog::Entry* entry;    // Pointer into the static catalog array.
+    std::wstring          label;    // entry id, or "<id>@{GUID}" for a per-adapter target
     std::optional<DWORD>  current;  // Current registry value (nullopt = absent).
     Status                status;
 };
@@ -32,7 +34,9 @@ struct Result {
 // Returns one Result per entry in catalog order.
 // PER_ADAPTER entries are included with status = ADAPTER_PENDING.
 // Never writes to the registry.
-std::vector<Result> scan_all();
+// adapter_guids: GUIDs for PER_ADAPTER entries (one result per adapter); null = enumerate the
+// physical adapters. With no adapters a per-adapter entry gives one ADAPTER_PENDING result.
+std::vector<Result> scan_all(const std::vector<std::wstring>* adapter_guids = nullptr);
 
 // Prints a formatted scan report to stdout.
 // os_major / os_minor are passed for the header line.

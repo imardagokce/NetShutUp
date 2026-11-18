@@ -8,6 +8,7 @@
 // profile ("domain"|"private"|"public") and value_name is "enabled"|"inbound".
 
 #include "catalog.h"
+#include "targets.h"
 #include <optional>
 #include <windows.h>
 
@@ -19,5 +20,10 @@ bool write(const catalog::Entry& e, DWORD value);
 // Restores "not set". The firewall has no "not set" state (reads return the
 // effective value), so for FIREWALL this is a no-op that returns true.
 bool remove(const catalog::Entry& e);
+
+// Same operations on a resolved target (per-adapter entries use the target's subkey).
+std::optional<DWORD> read(const targets::Target& t);
+bool write(const targets::Target& t, DWORD value);
+bool remove(const targets::Target& t);
 
 } // namespace netshutup::store

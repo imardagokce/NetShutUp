@@ -48,18 +48,22 @@ struct RevertResult {
 //  dry_run: if true, simulates apply without modifying the registry or writing files.
 //  custom_backup_path: if non-empty, writes backup to this path (useful for testing).
 //  lookup: if non-null, overrides catalog lookup for sandbox tests.
+//  adapter_guids: GUIDs used for PER_ADAPTER entries; null = enumerate the physical
+//                 adapters (tests pass a fixed list so they never depend on the machine).
 ApplyResult apply_profile(const wchar_t* profile_name,
                           DWORD os_mask,
                           bool dry_run = false,
                           const std::wstring& custom_backup_path = L"",
-                          backup::LookupFn lookup = nullptr);
+                          backup::LookupFn lookup = nullptr,
+                          const std::vector<std::wstring>* adapter_guids = nullptr);
 
 // Applies a specific list of entries (used by apply_profile and test harness).
 ApplyResult apply_entries(const std::vector<const catalog::Entry*>& entries,
                           const std::wstring& profile_name,
                           bool dry_run = false,
                           const std::wstring& custom_backup_path = L"",
-                          backup::LookupFn lookup = nullptr);
+                          backup::LookupFn lookup = nullptr,
+                          const std::vector<std::wstring>* adapter_guids = nullptr);
 
 // Core revert function.
 // If specific_backup_path is empty, finds the most recent backup in backups\.

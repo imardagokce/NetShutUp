@@ -21,6 +21,7 @@ set(LEGACY_LIB_SOURCES
     ${PROJECT_SOURCE_DIR}/src/selftest_runner.cpp
     ${PROJECT_SOURCE_DIR}/src/firewall.cpp
     ${PROJECT_SOURCE_DIR}/src/store.cpp
+    ${PROJECT_SOURCE_DIR}/src/targets.cpp
     ${PROJECT_SOURCE_DIR}/src/dns_config.cpp
     ${PROJECT_SOURCE_DIR}/src/dns_failover.cpp
     ${PROJECT_SOURCE_DIR}/src/dns_packet.cpp
@@ -122,3 +123,9 @@ endforeach()
 add_executable(manual_dns_probe manual_dns_probe.cpp ${LEGACY_LIB_SOURCES})
 configure_test(manual_dns_probe)
 target_link_libraries(manual_dns_probe PRIVATE iphlpapi)
+
+# targets (per-adapter expansion)
+add_executable(test_targets test_targets.cpp ${LEGACY_LIB_SOURCES})
+configure_test(test_targets)
+target_link_libraries(test_targets PRIVATE iphlpapi)
+add_test(NAME targets COMMAND test_targets)

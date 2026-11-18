@@ -21,7 +21,8 @@ DWORD parse_profile_flag(const wchar_t* profile_name) noexcept {
 
 // ── Preview generation ────────────────────────────────────────────────────────
 
-std::optional<ProfilePreview> generate(const wchar_t* profile_name, DWORD os_mask) {
+std::optional<ProfilePreview> generate(const wchar_t* profile_name, DWORD os_mask,
+                                       const std::vector<std::wstring>* adapter_guids) {
     DWORD flag = parse_profile_flag(profile_name);
     if (flag == 0) {
         return std::nullopt;
@@ -33,6 +34,9 @@ std::optional<ProfilePreview> generate(const wchar_t* profile_name, DWORD os_mas
 
     preview.firewall_note = firewall::skip_reason();
 
+    std::vector<std::wstring> guids;
+    bool guids_loaded = false;
+
     for (std::size_t i = 0; i < catalog::entry_count(); ++i) {
         const auto& entry = catalog::entries()[i];
 
@@ -41,16 +45,34 @@ std::optional<ProfilePreview> generate(const wchar_t* profile_name, DWORD os_mas
         if ((entry.os_mask & os_mask) == 0) continue;
         if (entry.scope == catalog::Scope::FIREWALL && !preview.firewall_note.empty()) continue;
 
-        Item item;
-        item.entry = &entry;
-        item.target_value = entry.target_dword;
-
+        // One row per concrete target (per-adapter entries: one per physical adapter).
+        std::vector<targets::Target> list;
         if (entry.scope == catalog::Scope::PER_ADAPTER) {
-            item.current_value = std::nullopt;
-            item.action = Action::ADAPTER_PENDING;
-            preview.pending_adapter_count++;
+            if (!guids_loaded) {
+                guids = adapter_guids ? *adapter_guids : targets::physical_adapter_guids();
+                guids_loaded = true;
+            }
+            for (const auto& g : guids) list.push_back(targets::make_target(entry, g));
+            if (list.empty()) {
+                Item pending;
+                pending.entry = &entry;
+                pending.label = entry.id;
+                pending.target_value = entry.target_dword;
+                pending.action = Action::ADAPTER_PENDING;
+                preview.pending_adapter_count++;
+                preview.items.push_back(pending);
+                continue;
+            }
         } else {
-            item.current_value = store::read(entry);
+            list.push_back(targets::make_target(entry, L""));
+        }
+
+        for (const auto& t : list) {
+            Item item;
+            item.entry = &entry;
+            item.label = t.id;
+            item.target_value = entry.target_dword;
+            item.current_value = store::read(t);
             if (item.current_value.has_value()) {
                 if (*item.current_value == entry.target_dword) {
                     item.action = Action::NO_CHANGE;
@@ -63,9 +85,8 @@ std::optional<ProfilePreview> generate(const wchar_t* profile_name, DWORD os_mas
                 item.action = Action::ADD;
                 preview.to_change_count++;
             }
+            preview.items.push_back(item);
         }
-
-        preview.items.push_back(item);
     }
 
     return preview;
@@ -105,8 +126,6 @@ void print_preview(const ProfilePreview& preview) {
             L"--------------------------------------------------------------------------------");
 
     for (const auto& item : preview.items) {
-        const auto& e = *item.entry;
-
         wchar_t cur_buf[24];
         if (item.current_value.has_value()) {
             _snwprintf_s(cur_buf, _countof(cur_buf), _TRUNCATE, L"%lu", *item.current_value);
@@ -129,12 +148,12 @@ void print_preview(const ProfilePreview& preview) {
                 _snwprintf_s(act_buf, _countof(act_buf), _TRUNCATE, L"Add -> %lu", item.target_value);
                 break;
             case Action::ADAPTER_PENDING:
-                _snwprintf_s(act_buf, _countof(act_buf), _TRUNCATE, L"(per-adapter, pending)");
+                _snwprintf_s(act_buf, _countof(act_buf), _TRUNCATE, L"(no adapter found)");
                 break;
         }
 
         wprintf(L"%-*ls  %-*ls  %-*ls  %ls\n",
-                W_ID,      e.id,
+                W_ID,      targets::display_label(item.label).c_str(),
                 W_CURRENT, cur_buf,
                 W_TARGET,  tgt_buf,
                            act_buf);

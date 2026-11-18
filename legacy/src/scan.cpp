@@ -8,34 +8,49 @@ namespace netshutup::scan {
 
 // ── scan_all ──────────────────────────────────────────────────────────────────
 
-std::vector<Result> scan_all() {
+static Result make_result(const catalog::Entry& e, const targets::Target& t) {
+    Result r{};
+    r.entry = &e;
+    r.label = t.id;
+    r.current = store::read(t);
+    if (!r.current.has_value()) {
+        // Value absent. If the catalog says Windows does not create it by default,
+        // absence is the expected default state.
+        r.status = Status::NOT_SET;
+    } else if (*r.current == e.default_dword) {
+        r.status = Status::AT_DEFAULT;
+    } else {
+        r.status = Status::MODIFIED;
+    }
+    return r;
+}
+
+std::vector<Result> scan_all(const std::vector<std::wstring>* adapter_guids) {
     std::vector<Result> results;
     results.reserve(catalog::entry_count());
 
+    std::vector<std::wstring> guids;
+    bool guids_loaded = false;
+
     for (std::size_t i = 0; i < catalog::entry_count(); ++i) {
         const catalog::Entry& e = catalog::entries()[i];
-        Result r{};
-        r.entry = &e;
 
         if (e.scope == catalog::Scope::PER_ADAPTER) {
-            r.current = std::nullopt;
-            r.status  = Status::ADAPTER_PENDING;
-        } else {
-            r.current = store::read(e);
-
-            if (!r.current.has_value()) {
-                // Value absent in registry.
-                // If the catalog says Windows does not create it by default,
-                // absence is the expected default state.
-                r.status = Status::NOT_SET;
-            } else if (*r.current == e.default_dword) {
-                r.status = Status::AT_DEFAULT;
-            } else {
-                r.status = Status::MODIFIED;
+            if (!guids_loaded) {
+                guids = adapter_guids ? *adapter_guids : targets::physical_adapter_guids();
+                guids_loaded = true;
             }
+            if (guids.empty()) {
+                Result r{};
+                r.entry = &e;
+                r.label = e.id;
+                r.status = Status::ADAPTER_PENDING;
+                results.push_back(r);
+            }
+            for (const auto& g : guids) results.push_back(make_result(e, targets::make_target(e, g)));
+        } else {
+            results.push_back(make_result(e, targets::make_target(e, L"")));
         }
-
-        results.push_back(r);
     }
 
     return results;
@@ -48,7 +63,7 @@ static const wchar_t* status_label(Status s) noexcept {
         case Status::AT_DEFAULT:      return L"default";
         case Status::MODIFIED:        return L"modified";
         case Status::NOT_SET:         return L"not set";
-        case Status::ADAPTER_PENDING: return L"(per-adapter, pending)";
+        case Status::ADAPTER_PENDING: return L"(no adapter found)";
     }
     return L"?";
 }
@@ -91,14 +106,12 @@ void print_results(const std::vector<Result>& results,
             _snwprintf_s(def_buf, _countof(def_buf), _TRUNCATE, L"(absent)");
 
         wprintf(L"%-*ls  %-*ls  %-*ls  %ls\n",
-                W_ID,      e.id,
+                W_ID,      targets::display_label(r.label).c_str(),
                 W_CURRENT, cur_buf,
                 W_DEFAULT, def_buf,
                            status_label(r.status));
     }
 
-    wprintf(L"\nNote: per-adapter settings are not shown until the adapter\n"
-            L"      enumeration module is implemented.\n");
 }
 
 } // namespace netshutup::scan

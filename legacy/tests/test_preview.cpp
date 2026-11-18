@@ -4,6 +4,8 @@
 #include "catalog.h"
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+#include <vector>
 
 using namespace netshutup;
 
@@ -62,7 +64,9 @@ static void test_generate_privacy() {
 }
 
 static void test_generate_performance() {
-    auto res = preview::generate(L"performance", catalog::OS_ALL);
+    // No adapters: the per-adapter entries show one pending row each.
+    const std::vector<std::wstring> none;
+    auto res = preview::generate(L"performance", catalog::OS_ALL, &none);
     EXPECT(res.has_value());
 
     // Expect perf.net_throttle, perf.tcp_nodelay, perf.tcp_ack_freq
@@ -84,6 +88,31 @@ static void test_generate_performance() {
     EXPECT_EQ(res->pending_adapter_count, 2u);
 }
 
+static void test_generate_performance_per_adapter_rows() {
+    const std::vector<std::wstring> guids = {L"{AAAAAAAA-0000-0000-0000-000000000001}",
+                                             L"{BBBBBBBB-0000-0000-0000-000000000002}"};
+    auto res = preview::generate(L"performance", catalog::OS_ALL, &guids);
+    EXPECT(res.has_value());
+
+    int rows_nodelay = 0, rows_ackfreq = 0;
+    for (const auto& item : res->items) {
+        if (wcscmp(item.entry->id, L"perf.tcp_nodelay") == 0) {
+            ++rows_nodelay;
+            EXPECT(item.action == preview::Action::ADD);   // fake GUIDs: value absent
+            EXPECT(item.label.rfind(L"perf.tcp_nodelay@{", 0) == 0);
+        }
+        if (wcscmp(item.entry->id, L"perf.tcp_ack_freq") == 0) {
+            ++rows_ackfreq;
+            EXPECT(item.label.rfind(L"perf.tcp_ack_freq@{", 0) == 0);
+        }
+    }
+    EXPECT_EQ(rows_nodelay, 2);
+    EXPECT_EQ(rows_ackfreq, 2);
+    EXPECT_EQ(res->pending_adapter_count, 0u);
+    EXPECT_EQ(res->items.size(),
+              res->to_change_count + res->already_set_count + res->pending_adapter_count);
+}
+
 static void test_generate_recommended() {
     auto res = preview::generate(L"recommended", catalog::OS_ALL);
     EXPECT(res.has_value());
@@ -102,6 +131,7 @@ int main() {
     test_generate_invalid();
     test_generate_privacy();
     test_generate_performance();
+    test_generate_performance_per_adapter_rows();
     test_generate_recommended();
 
     if (g_failed == 0) {

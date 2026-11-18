@@ -23,6 +23,7 @@ enum class Action {
 
 struct Item {
     const catalog::Entry* entry;
+    std::wstring          label;          // entry id, or "<id>@{GUID}" for a per-adapter target
     std::optional<DWORD>  current_value;
     DWORD                 target_value;
     Action                action;
@@ -44,7 +45,10 @@ DWORD parse_profile_flag(const wchar_t* profile_name) noexcept;
 
 // Generates preview items for the given profile name and OS version mask.
 // Returns std::nullopt if the profile name is unrecognized.
-std::optional<ProfilePreview> generate(const wchar_t* profile_name, DWORD os_mask);
+// adapter_guids: GUIDs for PER_ADAPTER entries (one row per adapter); null = enumerate the
+// physical adapters. With no adapters a per-adapter entry shows one ADAPTER_PENDING row.
+std::optional<ProfilePreview> generate(const wchar_t* profile_name, DWORD os_mask,
+                                       const std::vector<std::wstring>* adapter_guids = nullptr);
 
 // Prints a formatted preview table and summary to stdout.
 void print_preview(const ProfilePreview& preview);

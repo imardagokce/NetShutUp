@@ -16,7 +16,8 @@ ApplyResult apply_entries(const std::vector<const catalog::Entry*>& entries,
                           const std::wstring& profile_name,
                           bool dry_run,
                           const std::wstring& custom_backup_path,
-                          backup::LookupFn lookup) {
+                          backup::LookupFn lookup,
+                          const std::vector<std::wstring>* adapter_guids) {
     ApplyResult res{};
     res.profile_name = profile_name;
     res.is_dry_run = dry_run;
@@ -27,17 +28,24 @@ ApplyResult apply_entries(const std::vector<const catalog::Entry*>& entries,
         return res;
     }
 
+    // Resolve per-adapter entries against the physical adapters (real enumeration unless injected).
+    std::size_t per_adapter_entries = 0;
+    for (const auto* e : entries) {
+        if (e && e->scope == catalog::Scope::PER_ADAPTER) ++per_adapter_entries;
+    }
+    std::vector<std::wstring> guids;
+    if (per_adapter_entries > 0) {
+        guids = adapter_guids ? *adapter_guids : targets::physical_adapter_guids();
+        if (guids.empty()) res.skipped_count += per_adapter_entries;   // nothing to apply them to
+    }
+    const std::vector<targets::Target> list = targets::expand(entries, guids);
+
     // ── Dry-Run Mode ──────────────────────────────────────────────────────────
     if (dry_run) {
         res.success = true;
-        for (const auto* entry : entries) {
-            if (!entry) continue;
-            if (entry->scope == catalog::Scope::PER_ADAPTER) {
-                res.skipped_count++;
-            } else {
-                res.applied_count++;
-                res.item_results.push_back({entry, true, entry->target_dword});
-            }
+        for (const auto& t : list) {
+            res.applied_count++;
+            res.item_results.push_back({t.entry, true, t.entry->target_dword});
         }
         return res;
     }
@@ -45,7 +53,7 @@ ApplyResult apply_entries(const std::vector<const catalog::Entry*>& entries,
     // ── 1. Create and Verify Backup Before First Write ─────────────────────────
     std::wstring b_path = custom_backup_path.empty() ? backup::new_backup_path() : custom_backup_path;
 
-    if (!backup::save(entries, profile_name, b_path)) {
+    if (!backup::save(list, profile_name, b_path)) {
         res.success = false;
         res.error_message = L"Failed to create or verify backup file. No changes were made.";
         return res;
@@ -53,21 +61,16 @@ ApplyResult apply_entries(const std::vector<const catalog::Entry*>& entries,
     res.backup_path = b_path;
 
     // ── 2. Apply Each Setting ─────────────────────────────────────────────────
-    for (const auto* entry : entries) {
-        if (!entry) continue;
-        if (entry->scope == catalog::Scope::PER_ADAPTER) {
-            // Per-adapter settings deferred until adapter enumeration is built
-            res.skipped_count++;
-            continue;
-        }
+    for (const auto& t : list) {
+        const catalog::Entry* entry = t.entry;
 
         // Firewall: already at target -> nothing to write (avoids needless COM writes).
         bool ok;
         if (entry->scope == catalog::Scope::FIREWALL &&
-            store::read(*entry) == std::optional<DWORD>(entry->target_dword)) {
+            store::read(t) == std::optional<DWORD>(entry->target_dword)) {
             ok = true;
         } else {
-            ok = store::write(*entry, entry->target_dword);
+            ok = store::write(t, entry->target_dword);
         }
         res.item_results.push_back({entry, ok, entry->target_dword});
 
@@ -76,7 +79,7 @@ ApplyResult apply_entries(const std::vector<const catalog::Entry*>& entries,
         } else {
             // ── 3. Critical Failure: Atomic Rollback ───────────────────────────
             res.success = false;
-            res.error_message = L"Failed to write registry setting: " + std::wstring(entry->id);
+            res.error_message = L"Failed to write registry setting: " + t.id;
 
             // Roll back all changes made so far using the verified backup
             auto b = backup::load(b_path);
@@ -102,7 +105,8 @@ ApplyResult apply_profile(const wchar_t* profile_name,
                           DWORD os_mask,
                           bool dry_run,
                           const std::wstring& custom_backup_path,
-                          backup::LookupFn lookup) {
+                          backup::LookupFn lookup,
+                          const std::vector<std::wstring>* adapter_guids) {
     ApplyResult res{};
     res.profile_name = profile_name ? profile_name : L"";
     res.is_dry_run = dry_run;
@@ -125,7 +129,7 @@ ApplyResult apply_profile(const wchar_t* profile_name,
         entries.push_back(&entry);
     }
 
-    ApplyResult result = apply_entries(entries, profile_name, dry_run, custom_backup_path, lookup);
+    ApplyResult result = apply_entries(entries, profile_name, dry_run, custom_backup_path, lookup, adapter_guids);
     result.firewall_note = fw_skip;
     return result;
 }
@@ -171,7 +175,7 @@ void print_apply_result(const ApplyResult& result) {
     if (result.is_dry_run) {
         wprintf(L"\n[DRY-RUN] Simulated apply for profile '%ls':\n", result.profile_name.c_str());
         wprintf(L"  - %zu setting(s) would be applied.\n", result.applied_count);
-        wprintf(L"  - %zu setting(s) pending adapter enumeration.\n", result.skipped_count);
+        wprintf(L"  - %zu setting(s) skipped (no physical network adapter found).\n", result.skipped_count);
         if (!result.firewall_note.empty()) wprintf(L"  Note: %ls\n", result.firewall_note.c_str());
         wprintf(L"  (No registry keys were modified and no backup file was created).\n\n");
         return;
@@ -183,7 +187,7 @@ void print_apply_result(const ApplyResult& result) {
         wprintf(L"Profile:           %ls\n", result.profile_name.c_str());
         wprintf(L"Settings applied:  %zu\n", result.applied_count);
         if (result.skipped_count > 0) {
-            wprintf(L"Settings deferred: %zu (per-adapter settings pending adapter support)\n", result.skipped_count);
+            wprintf(L"Settings deferred: %zu (per-adapter settings: no physical network adapter found)\n", result.skipped_count);
         }
         if (!result.firewall_note.empty()) wprintf(L"Note:              %ls\n", result.firewall_note.c_str());
         wprintf(L"Backup saved to:   %ls\n\n", result.backup_path.c_str());

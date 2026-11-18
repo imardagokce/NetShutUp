@@ -28,12 +28,21 @@ static int g_failed = 0;
 // ── Sandbox setup & teardown ──────────────────────────────────────────────────
 
 static constexpr wchar_t TEST_SUBKEY[] = L"Software\\NetShutUp-Test\\apply_test";
+static constexpr wchar_t TEST_PA_TEMPLATE[] = L"Software\\NetShutUp-Test\\apply_test\\If_{ADAPTER-GUID}";
+static constexpr wchar_t TEST_GUID_A[] = L"{AAAAAAAA-0000-0000-0000-00000000000A}";
+static constexpr wchar_t TEST_GUID_B[] = L"{BBBBBBBB-0000-0000-0000-00000000000B}";
+static constexpr wchar_t TEST_PA_SUBKEY_A[] = L"Software\\NetShutUp-Test\\apply_test\\If_{AAAAAAAA-0000-0000-0000-00000000000A}";
+static constexpr wchar_t TEST_PA_SUBKEY_B[] = L"Software\\NetShutUp-Test\\apply_test\\If_{BBBBBBBB-0000-0000-0000-00000000000B}";
 static constexpr wchar_t TEST_BACKUP[] = L"Software_NetShutUp_Test_apply_backup.nsub";
 
 static void cleanup_sandbox() {
     registry::delete_value(HKEY_CURRENT_USER, TEST_SUBKEY, L"Val1");
     registry::delete_value(HKEY_CURRENT_USER, TEST_SUBKEY, L"Val2");
     registry::delete_value(HKEY_CURRENT_USER, TEST_SUBKEY, L"ValReadOnly");
+    registry::delete_value(HKEY_CURRENT_USER, TEST_PA_SUBKEY_A, L"PaVal");
+    registry::delete_value(HKEY_CURRENT_USER, TEST_PA_SUBKEY_B, L"PaVal");
+    RegDeleteKeyW(HKEY_CURRENT_USER, TEST_PA_SUBKEY_A);
+    RegDeleteKeyW(HKEY_CURRENT_USER, TEST_PA_SUBKEY_B);
     RegDeleteKeyW(HKEY_CURRENT_USER, TEST_SUBKEY);
     DeleteFileW(TEST_BACKUP);
 }
@@ -80,7 +89,22 @@ static const catalog::Entry s_entry_fail = {
     L"https://example.com"
 };
 
+// Per-adapter entry: one registry key per adapter GUID under the sandbox.
+static const catalog::Entry s_entry_pa = {
+    L"test.apply.pa",
+    HKEY_CURRENT_USER,
+    TEST_PA_TEMPLATE,
+    L"PaVal",
+    catalog::Scope::PER_ADAPTER,
+    0, false, 7,
+    catalog::PROFILE_PRIVACY,
+    catalog::OS_ALL,
+    L"Test per-adapter setting",
+    L"https://example.com"
+};
+
 static const catalog::Entry* test_lookup(const wchar_t* id) {
+    if (wcscmp(id, L"test.apply.pa") == 0) return &s_entry_pa;
     if (wcscmp(id, L"test.apply.val1") == 0) return &s_entry_1;
     if (wcscmp(id, L"test.apply.val2") == 0) return &s_entry_2;
     if (wcscmp(id, L"test.apply.fail") == 0) return &s_entry_fail;
@@ -157,6 +181,69 @@ static void test_apply_and_revert() {
     cleanup_sandbox();
 }
 
+static void test_per_adapter_apply_and_revert() {
+    cleanup_sandbox();
+
+    const std::vector<std::wstring> guids = {TEST_GUID_A, TEST_GUID_B};
+    // Adapter A already has 3; adapter B has no value ("not set").
+    EXPECT(registry::write_dword(HKEY_CURRENT_USER, TEST_PA_SUBKEY_A, L"PaVal", 3u));
+    EXPECT(!registry::read_dword(HKEY_CURRENT_USER, TEST_PA_SUBKEY_B, L"PaVal").has_value());
+
+    std::vector<const catalog::Entry*> entries = { &s_entry_1, &s_entry_pa };
+
+    // Dry run: counts targets, writes nothing.
+    auto dry = apply::apply_entries(entries, L"privacy", true, TEST_BACKUP, test_lookup, &guids);
+    EXPECT(dry.success);
+    EXPECT_EQ(dry.applied_count, 3u);   // Val1 + one per adapter
+    EXPECT_EQ(dry.skipped_count, 0u);
+    EXPECT(!registry::read_dword(HKEY_CURRENT_USER, TEST_PA_SUBKEY_B, L"PaVal").has_value());
+
+    auto res = apply::apply_entries(entries, L"privacy", false, TEST_BACKUP, test_lookup, &guids);
+    EXPECT(res.success);
+    EXPECT_EQ(res.applied_count, 3u);
+    auto a = registry::read_dword(HKEY_CURRENT_USER, TEST_PA_SUBKEY_A, L"PaVal");
+    auto b = registry::read_dword(HKEY_CURRENT_USER, TEST_PA_SUBKEY_B, L"PaVal");
+    EXPECT(a.has_value() && *a == 7u);
+    EXPECT(b.has_value() && *b == 7u);
+
+    auto rev = apply::revert(TEST_BACKUP, test_lookup);
+    EXPECT(rev.success);
+    EXPECT_EQ(rev.restored_count, 3u);
+    auto a2 = registry::read_dword(HKEY_CURRENT_USER, TEST_PA_SUBKEY_A, L"PaVal");
+    EXPECT(a2.has_value() && *a2 == 3u);                                       // back to the old value
+    EXPECT(!registry::read_dword(HKEY_CURRENT_USER, TEST_PA_SUBKEY_B, L"PaVal").has_value());   // "not set" again
+
+    cleanup_sandbox();
+}
+
+static void test_per_adapter_without_adapters_is_skipped() {
+    cleanup_sandbox();
+    const std::vector<std::wstring> none;
+    std::vector<const catalog::Entry*> entries = { &s_entry_1, &s_entry_pa };
+
+    auto res = apply::apply_entries(entries, L"privacy", false, TEST_BACKUP, test_lookup, &none);
+    EXPECT(res.success);
+    EXPECT_EQ(res.applied_count, 1u);   // only the global entry
+    EXPECT_EQ(res.skipped_count, 1u);   // the per-adapter entry had nothing to apply to
+    cleanup_sandbox();
+}
+
+static void test_per_adapter_rollback_on_failure() {
+    cleanup_sandbox();
+    const std::vector<std::wstring> guids = {TEST_GUID_A, TEST_GUID_B};
+    EXPECT(registry::write_dword(HKEY_CURRENT_USER, TEST_PA_SUBKEY_A, L"PaVal", 3u));
+
+    // Per-adapter writes succeed, then the failing entry triggers the automatic rollback.
+    std::vector<const catalog::Entry*> entries = { &s_entry_pa, &s_entry_fail };
+    auto res = apply::apply_entries(entries, L"privacy", false, TEST_BACKUP, test_lookup, &guids);
+    EXPECT(!res.success);
+    EXPECT(res.rolled_back);
+    auto a = registry::read_dword(HKEY_CURRENT_USER, TEST_PA_SUBKEY_A, L"PaVal");
+    EXPECT(a.has_value() && *a == 3u);
+    EXPECT(!registry::read_dword(HKEY_CURRENT_USER, TEST_PA_SUBKEY_B, L"PaVal").has_value());
+    cleanup_sandbox();
+}
+
 static void test_automatic_rollback_on_failure() {
     cleanup_sandbox();
 
@@ -188,6 +275,9 @@ int main() {
     test_dry_run();
     test_apply_and_revert();
     test_automatic_rollback_on_failure();
+    test_per_adapter_apply_and_revert();
+    test_per_adapter_without_adapters_is_skipped();
+    test_per_adapter_rollback_on_failure();
 
     cleanup_sandbox();
 

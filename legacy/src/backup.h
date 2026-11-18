@@ -13,6 +13,7 @@
 //  - File format: plain-text, UTF-8, human-readable (.nsub extension).
 
 #include "catalog.h"
+#include "targets.h"
 #include <optional>
 #include <string>
 #include <vector>
@@ -36,12 +37,19 @@ struct Backup {
 // Reads current registry values for the given catalog entries, writes them
 // to `path`, then verifies by reading the file back and comparing.
 //
-// PER_ADAPTER entries are silently skipped (adapter module not yet built).
+// PER_ADAPTER entries are skipped by this overload (no adapter list); use the
+// targets overload below to back up per-adapter settings.
 // Returns false if reading, writing, or verification fails.
 // The caller must not proceed with apply if this returns false.
 bool save(const std::vector<const catalog::Entry*>& entries,
           const std::wstring&                        profile_name,
           const std::wstring&                        path);
+
+// Same, for resolved targets (see targets.h). Per-adapter targets are stored as
+// "<entry id>@{GUID}" lines.
+bool save(const std::vector<targets::Target>& targets,
+          const std::wstring&                 profile_name,
+          const std::wstring&                 path);
 
 // Loads a backup file from `path`.
 // Returns std::nullopt if the file cannot be opened, is empty, or is
