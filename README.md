@@ -99,7 +99,7 @@ Real-world testing is the most valuable thing right now.
 
 1. Build the program (see above) or ask for a test build.
 2. Run it, choose **Self-test (for testers)** in the menu, confirm, and accept the administrator prompt. It applies each profile, checks it, undoes it, and writes a report.
-3. Read the report (it contains no user name, computer name, Wi-Fi name or full IP/MAC addresses), then [open a test report](https://github.com/imardagokce/NetShutUp/issues/new?template=test-report.yml) and attach both files.
+3. Read the report (see [CONTRIBUTING.md](CONTRIBUTING.md#testing-guide) for the full guide; it contains no user name, computer name, Wi-Fi name or full IP/MAC addresses), then [open a test report](https://github.com/imardagokce/NetShutUp/issues/new?template=test-report.yml) and attach both files.
 
 <details>
 <summary>What the self-test report contains</summary>
@@ -134,7 +134,7 @@ legacy     Separate branch for Windows 7/8/8.1 (independent codebase)
 
 ## Contributing
 
-Issues and pull requests are welcome. Please keep changes small and tested (`cargo test` must pass, and no test may write to real settings), and follow [conventional commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `refactor:`, `chore:`). Dependencies are watched by Dependabot.
+Testers and contributors are welcome. Start with the **[Contributing & testing guide](CONTRIBUTING.md)**: it explains step by step how to test safely, how to send a report, and how to work on the code (small, tested changes; [conventional commits](https://www.conventionalcommits.org/)). Dependency security alerts are watched by Dependabot.
 
 ## License
 
