@@ -30,6 +30,9 @@ pub struct Profile {
     pub name: String,
     pub description: String,
     pub settings: Vec<Assignment>,
+    /// Items the user is asked about one by one before they are applied.
+    #[serde(default)]
+    pub optional: Vec<OptionalAssignment>,
     /// Which DNS providers to try; profiles that leave DNS alone omit it.
     #[serde(default)]
     pub dns: Option<DnsSpec>,
@@ -58,6 +61,26 @@ pub enum Choose {
 pub struct Assignment {
     pub id: String,
     pub set: Desired,
+}
+
+/// A system setting the user is asked about before it is changed. Default
+/// answer: no.
+// Dead-code allowances stay until the question flow (next task) uses these.
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OptionalAssignment {
+    pub id: String,
+    pub set: Desired,
+    pub question: String,
+}
+
+/// An optional item as the user sees it.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptionalItem {
+    pub id: String,
+    pub question: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -117,17 +140,38 @@ impl Profile {
     fn validate(&self) -> Result<(), String> {
         let mut seen = HashSet::new();
         for assignment in &self.settings {
-            let id = &assignment.id;
-            let setting = catalog::find(id)
-                .ok_or_else(|| format!("profile {}: unknown setting {id}", self.id))?;
-            if !seen.insert(id.as_str()) {
-                return Err(format!("profile {}: {id} is listed twice", self.id));
+            self.check_entry(&assignment.id, &assignment.set, &mut seen)?;
+        }
+
+        let mut seen_optional = HashSet::new();
+        for item in &self.optional {
+            if self.settings.iter().any(|assignment| assignment.id == item.id) {
+                return Err(format!("profile {}: {} is in settings and optional", self.id, item.id));
             }
-            if !assignment.set.fits(&setting.source) {
-                return Err(format!("profile {}: {id} has a value of the wrong kind", self.id));
+            let setting = self.check_entry(&item.id, &item.set, &mut seen_optional)?;
+            if setting.scope != Scope::System {
+                return Err(format!("profile {}: {} must be a system setting", self.id, item.id));
             }
         }
         self.validate_dns()
+    }
+
+    /// Checks one catalog id and its value; `seen` catches repeats.
+    fn check_entry(
+        &self,
+        id: &str,
+        set: &Desired,
+        seen: &mut HashSet<String>,
+    ) -> Result<&'static catalog::Setting, String> {
+        let setting = catalog::find(id)
+            .ok_or_else(|| format!("profile {}: unknown setting {id}", self.id))?;
+        if !seen.insert(id.to_string()) {
+            return Err(format!("profile {}: {id} is listed twice", self.id));
+        }
+        if !set.fits(&setting.source) {
+            return Err(format!("profile {}: {id} has a value of the wrong kind", self.id));
+        }
+        Ok(setting)
     }
 
     fn validate_dns(&self) -> Result<(), String> {
@@ -164,6 +208,21 @@ impl Profile {
         adapters
             .iter()
             .map(|guid| Target { setting, adapter: Some(guid.clone()), desired: first.state() })
+            .collect()
+    }
+
+    /// The optional items with what each would set. They are system settings,
+    /// so each target has no adapter.
+    #[allow(dead_code)]
+    pub fn optional_targets(&self) -> Vec<(OptionalItem, Target)> {
+        self.optional
+            .iter()
+            .filter_map(|item| {
+                let setting = catalog::find(&item.id)?;
+                let target = Target { setting, adapter: None, desired: item.set.to_state() };
+                let item = OptionalItem { id: item.id.clone(), question: item.question.clone() };
+                Some((item, target))
+            })
             .collect()
     }
 
@@ -363,6 +422,83 @@ mod tests {
             error.unwrap_err(),
             "profile t: firewall.public.enabled has a value of the wrong kind"
         );
+    }
+
+    fn with_optional(settings: &str, optional: &str) -> String {
+        format!(
+            r#"{{"id":"t","name":"T","description":"test","settings":[{settings}],"optional":[{optional}]}}"#
+        )
+    }
+
+    #[test]
+    fn privacy_has_the_four_optional_items_with_the_verbatim_questions() {
+        let profile = builtin().unwrap().into_iter().find(|p| p.id == "privacy").unwrap();
+        let found: Vec<(&str, Desired, &str)> = profile
+            .optional
+            .iter()
+            .map(|item| (item.id.as_str(), item.set.clone(), item.question.as_str()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (
+                    "firewall.rule.block_telemetry",
+                    Desired::Dword(1),
+                    "Block the Windows telemetry service from connecting out (adds a firewall rule that is removed again on revert)?",
+                ),
+                (
+                    "firewall.public.network_discovery",
+                    Desired::Dword(0),
+                    "Turn off network discovery rules on Public networks? Other devices will no longer find this computer on public Wi-Fi.",
+                ),
+                (
+                    "firewall.public.file_printer_sharing",
+                    Desired::Dword(0),
+                    "Turn off file and printer sharing rules on Public networks? Sharing and printers will not work on public networks.",
+                ),
+                (
+                    "firewall.public.remote_assistance",
+                    Desired::Dword(0),
+                    "Turn off Remote Assistance rules on Public networks?",
+                ),
+            ]
+        );
+
+        let targets = profile.optional_targets();
+        assert_eq!(targets.len(), 4);
+        assert!(targets.iter().all(|(_, target)| target.adapter.is_none()));
+        assert_eq!(targets[0].1.desired, State::Value(Value::Dword(1)));
+    }
+
+    #[test]
+    fn other_profiles_have_no_optional_items() {
+        for profile in builtin().unwrap().iter().filter(|p| p.id != "privacy") {
+            assert!(profile.optional.is_empty(), "{}", profile.id);
+        }
+    }
+
+    #[test]
+    fn an_id_in_settings_and_optional_is_rejected() {
+        let error = parse(&with_optional(
+            r#"{"id":"dns.llmnr","set":{"dword":0}}"#,
+            r#"{"id":"dns.llmnr","set":{"dword":0},"question":"?"}"#,
+        ));
+        assert_eq!(error.unwrap_err(), "profile t: dns.llmnr is in settings and optional");
+    }
+
+    #[test]
+    fn optional_items_must_exist_in_the_catalog() {
+        let error = parse(&with_optional("", r#"{"id":"no.such","set":{"dword":1},"question":"?"}"#));
+        assert_eq!(error.unwrap_err(), "profile t: unknown setting no.such");
+    }
+
+    #[test]
+    fn optional_items_must_be_system_settings() {
+        let error = parse(&with_optional(
+            "",
+            r#"{"id":"tcp.nagle.no_delay","set":{"dword":1},"question":"?"}"#,
+        ));
+        assert_eq!(error.unwrap_err(), "profile t: tcp.nagle.no_delay must be a system setting");
     }
 
     #[test]

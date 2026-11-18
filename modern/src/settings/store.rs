@@ -179,6 +179,22 @@ mod tests {
     }
 
     #[test]
+    fn every_optional_firewall_setting_can_be_read() {
+        let store = SystemStore::system();
+        let ids = [
+            "firewall.rule.block_telemetry",
+            "firewall.public.network_discovery",
+            "firewall.public.file_printer_sharing",
+            "firewall.public.remote_assistance",
+        ];
+        for id in ids {
+            let setting = crate::settings::catalog::find(id).unwrap();
+            let state = store.read(setting, None);
+            assert!(matches!(state, State::Value(Value::Dword(0 | 1))), "{id}: {state:?}");
+        }
+    }
+
+    #[test]
     fn firewall_writes_reject_other_value_types_before_touching_windows() {
         let store = SystemStore::system();
         let setting = crate::settings::catalog::find("firewall.public.enabled").unwrap();

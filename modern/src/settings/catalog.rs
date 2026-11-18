@@ -288,6 +288,47 @@ pub static CATALOG: &[Setting] = &[
         default: Some(DefaultValue::Dword(0)),
         labels: &[(0, "block"), (1, "allow")],
     },
+    Setting {
+        id: "firewall.rule.block_telemetry",
+        name: "Telemetry service outbound block",
+        scope: Scope::System,
+        source: Source::Firewall { network: Network::Public, field: Field::Rule },
+        default: Some(DefaultValue::Dword(0)),
+        labels: &[(0, "off"), (1, "on")],
+    },
+    Setting {
+        id: "firewall.public.network_discovery",
+        name: "Network discovery rules (Public)",
+        scope: Scope::System,
+        source: Source::Firewall {
+            network: Network::Public,
+            field: Field::Group("@FirewallAPI.dll,-32752"),
+        },
+        default: Some(DefaultValue::Dword(0)),
+        labels: &[(0, "off"), (1, "on")],
+    },
+    Setting {
+        id: "firewall.public.file_printer_sharing",
+        name: "File and printer sharing rules (Public)",
+        scope: Scope::System,
+        source: Source::Firewall {
+            network: Network::Public,
+            field: Field::Group("@FirewallAPI.dll,-28502"),
+        },
+        default: Some(DefaultValue::Dword(0)),
+        labels: &[(0, "off"), (1, "on")],
+    },
+    Setting {
+        id: "firewall.public.remote_assistance",
+        name: "Remote assistance rules (Public)",
+        scope: Scope::System,
+        source: Source::Firewall {
+            network: Network::Public,
+            field: Field::Group("@FirewallAPI.dll,-33002"),
+        },
+        default: Some(DefaultValue::Dword(0)),
+        labels: &[(0, "off"), (1, "on")],
+    },
 ];
 
 const TCP_SETTING: &str = "MSFT_NetTCPSetting";
@@ -327,7 +368,25 @@ mod tests {
             assert!(inbound.is_writable());
         }
         let count = CATALOG.iter().filter(|s| s.id.starts_with("firewall.")).count();
-        assert_eq!(count, 6);
+        assert_eq!(count, 10);
+    }
+
+    #[test]
+    fn optional_firewall_settings_have_their_names_labels_and_defaults() {
+        let expected = [
+            ("firewall.rule.block_telemetry", "Telemetry service outbound block"),
+            ("firewall.public.network_discovery", "Network discovery rules (Public)"),
+            ("firewall.public.file_printer_sharing", "File and printer sharing rules (Public)"),
+            ("firewall.public.remote_assistance", "Remote assistance rules (Public)"),
+        ];
+        for (id, name) in expected {
+            let setting = find(id).unwrap_or_else(|| panic!("missing {id}"));
+            assert_eq!(setting.name, name, "{id}");
+            assert_eq!(setting.scope, Scope::System, "{id}");
+            assert_eq!(setting.labels, &[(0, "off"), (1, "on")], "{id}");
+            assert!(matches!(setting.default, Some(DefaultValue::Dword(0))), "{id}");
+            assert!(setting.is_writable(), "{id}");
+        }
     }
 
     #[test]

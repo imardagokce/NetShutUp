@@ -241,6 +241,33 @@ mod tests {
     }
 
     #[test]
+    fn optional_firewall_items_apply_and_revert_exactly() {
+        let dir = temp_dir("optional-firewall");
+        let store = FakeStore::default();
+        store.seed("firewall.rule.block_telemetry", None, dword(0));
+        store.seed("firewall.public.file_printer_sharing", None, dword(1));
+        let before = store.snapshot();
+
+        let targets = vec![
+            target("firewall.rule.block_telemetry", None, dword(1)),
+            target("firewall.public.file_printer_sharing", None, dword(0)),
+        ];
+        let plan = plan(&store, targets);
+        let path = apply(&store, &dir, "test", "20261118-130000", &plan).unwrap().unwrap();
+
+        let rule = catalog::find("firewall.rule.block_telemetry").unwrap();
+        let sharing = catalog::find("firewall.public.file_printer_sharing").unwrap();
+        assert_eq!(store.read(rule, None), dword(1));
+        assert_eq!(store.read(sharing, None), dword(0));
+
+        let saved = backup::load(&path).unwrap();
+        assert_eq!(revert(&store, &saved), Vec::<String>::new());
+        assert_eq!(store.read(rule, None), dword(0));
+        assert_eq!(store.read(sharing, None), dword(1));
+        assert_eq!(store.snapshot(), before);
+    }
+
+    #[test]
     fn apply_then_revert_restores_exactly() {
         let dir = temp_dir("apply-revert");
         let store = FakeStore::default();

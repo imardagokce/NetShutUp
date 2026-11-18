@@ -14,5 +14,27 @@
     { "id": "firewall.public.enabled", "set": { "dword": 1 } },
     { "id": "firewall.public.inbound", "set": { "dword": 0 } }
   ],
+  "optional": [
+    {
+      "id": "firewall.rule.block_telemetry",
+      "set": { "dword": 1 },
+      "question": "Block the Windows telemetry service from connecting out (adds a firewall rule that is removed again on revert)?"
+    },
+    {
+      "id": "firewall.public.network_discovery",
+      "set": { "dword": 0 },
+      "question": "Turn off network discovery rules on Public networks? Other devices will no longer find this computer on public Wi-Fi."
+    },
+    {
+      "id": "firewall.public.file_printer_sharing",
+      "set": { "dword": 0 },
+      "question": "Turn off file and printer sharing rules on Public networks? Sharing and printers will not work on public networks."
+    },
+    {
+      "id": "firewall.public.remote_assistance",
+      "set": { "dword": 0 },
+      "question": "Turn off Remote Assistance rules on Public networks?"
+    }
+  ],
   "dns": { "providers": ["quad9", "cloudflare"], "choose": "first_working" }
 }
