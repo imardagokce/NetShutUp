@@ -8,7 +8,7 @@ The project will have two independent applications with separate source trees an
 
 | Product line | Proposed implementation | Proposed OS targets | Status |
 |---|---|---|---|
-| Legacy | Native C++ / Win32 | Windows 7 SP1, Windows 8, Windows 8.1 | Planned; toolchain and API compatibility need validation |
+| Legacy | **Native C++ / Win32 (MSVC, C++17)** | Windows 7 SP1, Windows 8, Windows 8.1 | Language selected (ADR-001); toolchain and API compatibility need validation |
 | Modern | C# / .NET | Windows 10, Windows 11 | Planned; minimum supported .NET version and Windows 10 build range need definition |
 
 Suggested repository layout:
