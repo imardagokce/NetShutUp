@@ -42,6 +42,7 @@ set(SOURCES
     src/elevation.cpp
     src/apply.cpp
     src/menu.cpp
+    src/adapters.cpp
 )
 
 # Console subsystem: CLI + interactive menu (no WIN32 flag).
@@ -51,7 +52,7 @@ target_include_directories(netshutup-legacy PRIVATE src)
 
 # Link ntdll for RtlGetVersion (loaded at runtime via GetProcAddress,
 # but we still declare the import so the linker resolves the module handle)
-target_link_libraries(netshutup-legacy PRIVATE ntdll)
+target_link_libraries(netshutup-legacy PRIVATE ntdll iphlpapi)
 
 # ── Application manifest ─────────────────────────────────────────────────────
 # Sets the subsystem and declares Windows 7 compatibility.

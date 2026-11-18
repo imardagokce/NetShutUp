@@ -27,7 +27,9 @@ For the Modern line (Windows 10/11), see the `main` branch changelog.
 - `legacy/src/elevation.h/cpp` — UAC administrator privilege detection and self-elevation via `ShellExecuteExW` (`runas`).
 - `legacy/src/apply.h/cpp` — Transactional profile apply and revert engine: backup-before-write guarantee, automatic rollback on write failures, `--dry-run` simulation mode, and one-command revert.
 - `legacy/src/menu.h/cpp` — Interactive Win32 console menu: arrow-key navigation, colored highlights, live status bar, zero-ANSI escape sequences for 100% native Windows 7/8/8.1 `cmd.exe` compatibility.
+- `legacy/src/adapters.h/cpp` — Physical network adapter enumeration using `GetAdaptersAddresses`: filters out virtual interfaces, tunnels, loopbacks, and VPNs to target only genuine physical hardware.
 - `legacy/tests/test_registry.cpp` — Registry sandbox unit tests (7 cases, all under `HKCU\Software\NetShutUp-Test`).
 - `legacy/tests/test_backup.cpp` — Backup engine sandbox unit tests (save/load roundtrip, corruption handling, value restore, deletion restore, path generation).
 - `legacy/tests/test_preview.cpp` — Preview engine unit tests (profile flags, diff classification, pending adapter detection).
 - `legacy/tests/test_apply.cpp` — Apply and revert sandbox unit tests (dry-run isolation, apply-and-revert roundtrip, automatic rollback on write failure).
+- `legacy/tests/test_adapters.cpp` — Physical adapter enumeration and subkey GUID formatting unit tests.

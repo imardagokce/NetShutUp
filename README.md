@@ -102,7 +102,7 @@ The rules the code is built around (and tests enforce):
 - [x] Built-in profile preview engine (`preview <profile>`) with change diff summary
 - [x] Apply and revert execution engine with automatic UAC elevation and safety rollback
 - [x] Interactive terminal menu (arrow-key navigation, color-coded, zero-ANSI via native Win32 console APIs)
-- [ ] Physical network adapter enumeration (`GetAdaptersAddresses`)
+- [x] Physical network adapter enumeration (`GetAdaptersAddresses` filtering out virtual/VPN devices)
 - [ ] Self-test mode with a masked report
 - [ ] Native Win32 desktop GUI (O&O ShutUp10-style native interface)
 - [ ] First alpha release with a prebuilt `.exe`

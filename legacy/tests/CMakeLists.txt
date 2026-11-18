@@ -15,6 +15,7 @@ set(LEGACY_LIB_SOURCES
     ${PROJECT_SOURCE_DIR}/src/preview.cpp
     ${PROJECT_SOURCE_DIR}/src/elevation.cpp
     ${PROJECT_SOURCE_DIR}/src/apply.cpp
+    ${PROJECT_SOURCE_DIR}/src/adapters.cpp
 )
 
 # Common settings applied to every test target.
@@ -66,3 +67,12 @@ add_executable(test_apply
 )
 configure_test(test_apply)
 add_test(NAME apply COMMAND test_apply)
+
+# ── test_adapters ─────────────────────────────────────────────────────────────
+add_executable(test_adapters
+    test_adapters.cpp
+    ${LEGACY_LIB_SOURCES}
+)
+configure_test(test_adapters)
+target_link_libraries(test_adapters PRIVATE iphlpapi)
+add_test(NAME adapters COMMAND test_adapters)
