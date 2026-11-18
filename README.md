@@ -10,6 +10,7 @@ A single-file Windows tool that tunes network privacy and performance settings, 
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows&logoColor=white)](#requirements)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-DEA584?style=flat-square&logo=rust&logoColor=white)](modern/Cargo.toml)
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange?style=flat-square)](#status)
+[![CI](https://img.shields.io/github/actions/workflow/status/imardagokce/NetShutUp/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/imardagokce/NetShutUp/actions/workflows/ci.yml)
 [![Dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?style=flat-square&logo=dependabot&logoColor=white)](.github/dependabot.yml)
 [![Last commit](https://img.shields.io/github/last-commit/imardagokce/NetShutUp?style=flat-square)](https://github.com/imardagokce/NetShutUp/commits/main)
 [![Issues](https://img.shields.io/github/issues/imardagokce/NetShutUp?style=flat-square)](https://github.com/imardagokce/NetShutUp/issues)
@@ -53,7 +54,7 @@ Every profile also makes sure Windows Firewall is on and blocks inbound connecti
 
 ## Quick start
 
-There is no release build yet; build from source (a few minutes, Rust required):
+**Testers:** once the first pre-release is published, download the zip from the [Releases page](https://github.com/imardagokce/NetShutUp/releases) (check the `.sha256`; the `.exe` is not code-signed, so SmartScreen may warn). Or build from source (a few minutes, Rust required):
 
 ```sh
 git clone https://github.com/imardagokce/NetShutUp.git
@@ -123,7 +124,7 @@ Found a security problem? Please use the private route described in [`SECURITY.m
 - [x] DNS-over-TLS as a second encrypted DNS method (experimental, tried when DoH does not work)
 - [x] Windows Firewall base tier for all profiles (on, inbound blocked by default; skipped when another firewall is registered)
 - [ ] Windows Firewall strict tier (Privacy profile)
-- [ ] First alpha release (`0.1.0-alpha.1`) with a prebuilt `.exe`
+- [ ] First alpha release (`0.1.0-alpha.1`) with a prebuilt `.exe` (prepared; published when testing is ready)
 - [ ] Advanced mode: switch individual settings on and off
 - [ ] Graphical interface
 

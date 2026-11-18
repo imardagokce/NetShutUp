@@ -29,3 +29,8 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Wmi",
     "Win32_NetworkManagement_WindowsFirewall",
 ] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

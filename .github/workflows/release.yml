@@ -1,0 +1,48 @@
+name: Release
+
+# Pushing a tag such as v0.1.0-alpha.1 builds the program and publishes a
+# GitHub pre-release with the .exe, a zip and a SHA-256 checksum.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release
+        working-directory: modern
+        run: cargo build --release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item modern/target/release/netshutup-modern.exe dist/netshutup-modern.exe
+          Copy-Item README.md, LICENSE, CONTRIBUTING.md dist/
+          $zip = "dist/NetShutUp-$tag-windows-x64.zip"
+          Compress-Archive -Path dist/netshutup-modern.exe, dist/README.md, dist/LICENSE, dist/CONTRIBUTING.md -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  NetShutUp-$tag-windows-x64.zip" | Out-File -Encoding ascii "$zip.sha256"
+
+      - name: Publish pre-release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $notes = "docs/releases/$tag.md"
+          if (-not (Test-Path $notes)) { throw "Missing release notes: $notes" }
+          gh release create $tag `
+            "dist/NetShutUp-$tag-windows-x64.zip" `
+            "dist/NetShutUp-$tag-windows-x64.zip.sha256" `
+            --title "NetShutUp $tag" `
+            --notes-file $notes `
+            --prerelease
