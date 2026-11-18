@@ -35,6 +35,11 @@ enum class Scope {
     // engine substitutes each physical adapter's GUID at runtime.
     // Adapter enumeration is implemented in adapter.h (future module).
     PER_ADAPTER,
+
+    // Windows Firewall setting read/written through INetFwPolicy2 (firewall.h).
+    // hive is unused (nullptr); subkey = L"domain"|L"private"|L"public";
+    // value_name = L"enabled"|L"inbound".
+    FIREWALL,
 };
 
 // ── Catalog entry ─────────────────────────────────────────────────────────────

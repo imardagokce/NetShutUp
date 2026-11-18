@@ -164,6 +164,96 @@ static const Entry k_entries[] = {
         L"KB328890"
     },
 
+    // ── Windows Firewall (tier 1) ─────────────────────────────────────────────
+    // Read/written via INetFwPolicy2 (Vista+). Skipped at plan time when a
+    // third-party firewall is registered (see firewall.h / design doc 6a).
+    {
+        L"firewall.domain.enabled",
+        nullptr,
+        L"domain",
+        L"enabled",
+        Scope::FIREWALL,
+        /*default_dword*/ 1,
+        /*default_exists*/ true,
+        /*target_dword*/  1,            // 1 = firewall on
+        PROFILE_PRIVACY | PROFILE_PERFORMANCE | PROFILE_RECOMMENDED,
+        OS_ALL,
+        L"Keep Windows Firewall on for Domain networks",
+        L"https://learn.microsoft.com/en-us/windows/win32/api/netfw/nn-netfw-inetfwpolicy2"
+    },
+    {
+        L"firewall.domain.inbound",
+        nullptr,
+        L"domain",
+        L"inbound",
+        Scope::FIREWALL,
+        /*default_dword*/ 0,
+        /*default_exists*/ true,
+        /*target_dword*/  0,            // 0 = block inbound by default
+        PROFILE_PRIVACY | PROFILE_PERFORMANCE | PROFILE_RECOMMENDED,
+        OS_ALL,
+        L"Block unsolicited inbound connections on Domain networks",
+        L"https://learn.microsoft.com/en-us/windows/win32/api/netfw/nn-netfw-inetfwpolicy2"
+    },
+
+    {
+        L"firewall.private.enabled",
+        nullptr,
+        L"private",
+        L"enabled",
+        Scope::FIREWALL,
+        /*default_dword*/ 1,
+        /*default_exists*/ true,
+        /*target_dword*/  1,            // 1 = firewall on
+        PROFILE_PRIVACY | PROFILE_PERFORMANCE | PROFILE_RECOMMENDED,
+        OS_ALL,
+        L"Keep Windows Firewall on for Private networks",
+        L"https://learn.microsoft.com/en-us/windows/win32/api/netfw/nn-netfw-inetfwpolicy2"
+    },
+    {
+        L"firewall.private.inbound",
+        nullptr,
+        L"private",
+        L"inbound",
+        Scope::FIREWALL,
+        /*default_dword*/ 0,
+        /*default_exists*/ true,
+        /*target_dword*/  0,            // 0 = block inbound by default
+        PROFILE_PRIVACY | PROFILE_PERFORMANCE | PROFILE_RECOMMENDED,
+        OS_ALL,
+        L"Block unsolicited inbound connections on Private networks",
+        L"https://learn.microsoft.com/en-us/windows/win32/api/netfw/nn-netfw-inetfwpolicy2"
+    },
+
+    {
+        L"firewall.public.enabled",
+        nullptr,
+        L"public",
+        L"enabled",
+        Scope::FIREWALL,
+        /*default_dword*/ 1,
+        /*default_exists*/ true,
+        /*target_dword*/  1,            // 1 = firewall on
+        PROFILE_PRIVACY | PROFILE_PERFORMANCE | PROFILE_RECOMMENDED,
+        OS_ALL,
+        L"Keep Windows Firewall on for Public networks",
+        L"https://learn.microsoft.com/en-us/windows/win32/api/netfw/nn-netfw-inetfwpolicy2"
+    },
+    {
+        L"firewall.public.inbound",
+        nullptr,
+        L"public",
+        L"inbound",
+        Scope::FIREWALL,
+        /*default_dword*/ 0,
+        /*default_exists*/ true,
+        /*target_dword*/  0,            // 0 = block inbound by default
+        PROFILE_PRIVACY | PROFILE_PERFORMANCE | PROFILE_RECOMMENDED,
+        OS_ALL,
+        L"Block unsolicited inbound connections on Public networks",
+        L"https://learn.microsoft.com/en-us/windows/win32/api/netfw/nn-netfw-inetfwpolicy2"
+    },
+
 }; // k_entries[]
 
 // ── Catalog access ────────────────────────────────────────────────────────────

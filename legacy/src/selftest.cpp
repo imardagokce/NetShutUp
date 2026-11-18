@@ -7,6 +7,7 @@
 #include "elevation.h"
 #include "preview.h"
 #include "registry.h"
+#include "store.h"
 #include "selftest_mask.h"
 
 #include <shellapi.h>
@@ -93,8 +94,8 @@ Snapshot real_snapshot(void* c) {
     Snapshot snap;
     const catalog::Entry* e = catalog::entries();
     for (std::size_t i = 0; i < catalog::entry_count(); ++i) {
-        if (e[i].scope == catalog::Scope::GLOBAL) {
-            snap.emplace_back(e[i].id, registry::read_dword(e[i].hive, e[i].subkey, e[i].value_name));
+        if (e[i].scope == catalog::Scope::GLOBAL || e[i].scope == catalog::Scope::FIREWALL) {
+            snap.emplace_back(e[i].id, store::read(e[i]));
         } else {
             for (const auto& nic : ctx->nics) {
                 std::wstring sub = adapters::format_subkey_for_adapter(e[i].subkey, nic.guid);
@@ -148,6 +149,7 @@ std::vector<std::pair<HKEY, std::wstring>> catalog_roots() {
     std::set<std::pair<HKEY, std::wstring>> roots;
     const catalog::Entry* e = catalog::entries();
     for (std::size_t i = 0; i < catalog::entry_count(); ++i) {
+        if (e[i].scope == catalog::Scope::FIREWALL) continue;   // exported with netsh below
         std::wstring sub = e[i].subkey;
         const std::wstring tag = L"\\{ADAPTER-GUID}";
         auto pos = sub.find(tag);
@@ -253,6 +255,26 @@ SafetyNet create_safety_net() {
             sn.error = L"reg export failed for " + hive_name(hive) + L"\\" + sub;
             return sn;
         }
+    }
+    // Windows Firewall policy (not in the registry export): netsh, exit code only.
+    {
+        std::wstring file = dir + L"\\firewall.wfw";
+        wchar_t sysdir[MAX_PATH] = {};
+        GetSystemDirectoryW(sysdir, MAX_PATH);
+        std::wstring cmd = L"\"" + std::wstring(sysdir) + L"\\netsh.exe\" advfirewall export \"" + file + L"\"";
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        bool exported = false;
+        if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                           nullptr, nullptr, &si, &pi)) {
+            DWORD code = 1;
+            if (WaitForSingleObject(pi.hProcess, 30000) == WAIT_OBJECT_0) GetExitCodeProcess(pi.hProcess, &code);
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            exported = (code == 0);
+        }
+        if (!exported) { sn.error = L"netsh advfirewall export failed"; return sn; }
     }
     sn.reg_export_ok = true;
 

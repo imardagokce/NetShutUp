@@ -2,6 +2,7 @@
 
 #include "backup.h"
 #include "registry.h"
+#include "store.h"
 #include <windows.h>
 #include <cstdio>
 #include <string>
@@ -115,7 +116,7 @@ bool save(const std::vector<const catalog::Entry*>& entries,
             continue;
         }
 
-        auto current = registry::read_dword(entry->hive, entry->subkey, entry->value_name);
+        auto current = store::read(*entry);
         BackupEntry be;
         be.id = entry->id;
         be.existed = current.has_value();
@@ -256,12 +257,12 @@ bool restore_with_lookup(const Backup& backup, LookupFn lookup) {
 
         if (item.existed) {
             // Restore previously existing value
-            if (!registry::write_dword(entry->hive, entry->subkey, entry->value_name, item.value)) {
+            if (!store::write(*entry, item.value)) {
                 return false;
             }
         } else {
             // Restore "not set" state by deleting the value
-            if (!registry::delete_value(entry->hive, entry->subkey, entry->value_name)) {
+            if (!store::remove(*entry)) {
                 return false;
             }
         }

@@ -35,6 +35,7 @@ struct ProfilePreview {
     std::size_t       to_change_count = 0;
     std::size_t       already_set_count = 0;
     std::size_t       pending_adapter_count = 0;
+    std::wstring      firewall_note;   // set when firewall settings were skipped
 };
 
 // Converts profile name ("privacy", "performance", "recommended") to bitmask.

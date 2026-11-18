@@ -47,6 +47,8 @@ set(SOURCES
     src/selftest_report.cpp
     src/selftest_runner.cpp
     src/selftest.cpp
+    src/firewall.cpp
+    src/store.cpp
 )
 
 # Console subsystem: CLI + interactive menu (no WIN32 flag).
@@ -56,7 +58,7 @@ target_include_directories(netshutup-legacy PRIVATE src)
 
 # Link ntdll for RtlGetVersion (loaded at runtime via GetProcAddress,
 # but we still declare the import so the linker resolves the module handle)
-target_link_libraries(netshutup-legacy PRIVATE ntdll iphlpapi shell32)
+target_link_libraries(netshutup-legacy PRIVATE ntdll iphlpapi shell32 ole32 oleaut32 wbemuuid)
 
 # ── Application manifest ─────────────────────────────────────────────────────
 # Sets the subsystem and declares Windows 7 compatibility.

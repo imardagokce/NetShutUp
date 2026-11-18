@@ -33,6 +33,7 @@ struct ApplyResult {
     bool                    rolled_back = false;
     bool                    is_dry_run = false;
     std::wstring            error_message;
+    std::wstring            firewall_note;   // set when firewall settings were skipped
 };
 
 struct RevertResult {

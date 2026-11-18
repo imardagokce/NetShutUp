@@ -1,7 +1,8 @@
 // preview.cpp — Read-only profile preview implementation for NetShutUp Legacy
 
 #include "preview.h"
-#include "registry.h"
+#include "firewall.h"
+#include "store.h"
 #include <cstdio>
 #include <cwchar>
 
@@ -29,12 +30,15 @@ std::optional<ProfilePreview> generate(const wchar_t* profile_name, DWORD os_mas
     preview.profile_name = profile_name;
     preview.profile_flag = flag;
 
+    preview.firewall_note = firewall::skip_reason();
+
     for (std::size_t i = 0; i < catalog::entry_count(); ++i) {
         const auto& entry = catalog::entries()[i];
 
         // Check profile membership and OS compatibility
         if ((entry.profiles & flag) == 0) continue;
         if ((entry.os_mask & os_mask) == 0) continue;
+        if (entry.scope == catalog::Scope::FIREWALL && !preview.firewall_note.empty()) continue;
 
         Item item;
         item.entry = &entry;
@@ -45,7 +49,7 @@ std::optional<ProfilePreview> generate(const wchar_t* profile_name, DWORD os_mas
             item.action = Action::ADAPTER_PENDING;
             preview.pending_adapter_count++;
         } else {
-            item.current_value = registry::read_dword(entry.hive, entry.subkey, entry.value_name);
+            item.current_value = store::read(entry);
             if (item.current_value.has_value()) {
                 if (*item.current_value == entry.target_dword) {
                     item.action = Action::NO_CHANGE;
@@ -84,6 +88,7 @@ void print_preview(const ProfilePreview& preview) {
     wprintf(L"\nNetShutUp Legacy -- Preview: %ls\n", preview.profile_name.c_str());
     wprintf(L"======================================================================\n");
     wprintf(L"Purpose: %ls\n\n", profile_description(preview.profile_flag));
+    if (!preview.firewall_note.empty()) wprintf(L"Note: %ls\n\n", preview.firewall_note.c_str());
 
     constexpr int W_ID      = 28;
     constexpr int W_CURRENT = 12;

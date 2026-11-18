@@ -1,7 +1,7 @@
 // scan.cpp — Read-only system scan (NetShutUp Legacy)
 
 #include "scan.h"
-#include "registry.h"
+#include "store.h"
 #include <cstdio>
 
 namespace netshutup::scan {
@@ -21,7 +21,7 @@ std::vector<Result> scan_all() {
             r.current = std::nullopt;
             r.status  = Status::ADAPTER_PENDING;
         } else {
-            r.current = registry::read_dword(e.hive, e.subkey, e.value_name);
+            r.current = store::read(e);
 
             if (!r.current.has_value()) {
                 // Value absent in registry.

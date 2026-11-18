@@ -2,7 +2,9 @@
 
 #include "apply.h"
 #include "preview.h"
+#include "firewall.h"
 #include "registry.h"
+#include "store.h"
 #include <cstdio>
 #include <cwchar>
 
@@ -59,7 +61,14 @@ ApplyResult apply_entries(const std::vector<const catalog::Entry*>& entries,
             continue;
         }
 
-        bool ok = registry::write_dword(entry->hive, entry->subkey, entry->value_name, entry->target_dword);
+        // Firewall: already at target -> nothing to write (avoids needless COM writes).
+        bool ok;
+        if (entry->scope == catalog::Scope::FIREWALL &&
+            store::read(*entry) == std::optional<DWORD>(entry->target_dword)) {
+            ok = true;
+        } else {
+            ok = store::write(*entry, entry->target_dword);
+        }
         res.item_results.push_back({entry, ok, entry->target_dword});
 
         if (ok) {
@@ -105,15 +114,20 @@ ApplyResult apply_profile(const wchar_t* profile_name,
         return res;
     }
 
+    const std::wstring fw_skip = firewall::skip_reason();
+
     std::vector<const catalog::Entry*> entries;
     for (std::size_t i = 0; i < catalog::entry_count(); ++i) {
         const auto& entry = catalog::entries()[i];
         if ((entry.profiles & flag) == 0) continue;
         if ((entry.os_mask & os_mask) == 0) continue;
+        if (entry.scope == catalog::Scope::FIREWALL && !fw_skip.empty()) continue;
         entries.push_back(&entry);
     }
 
-    return apply_entries(entries, profile_name, dry_run, custom_backup_path, lookup);
+    ApplyResult result = apply_entries(entries, profile_name, dry_run, custom_backup_path, lookup);
+    result.firewall_note = fw_skip;
+    return result;
 }
 
 // ── revert ────────────────────────────────────────────────────────────────────
@@ -158,6 +172,7 @@ void print_apply_result(const ApplyResult& result) {
         wprintf(L"\n[DRY-RUN] Simulated apply for profile '%ls':\n", result.profile_name.c_str());
         wprintf(L"  - %zu setting(s) would be applied.\n", result.applied_count);
         wprintf(L"  - %zu setting(s) pending adapter enumeration.\n", result.skipped_count);
+        if (!result.firewall_note.empty()) wprintf(L"  Note: %ls\n", result.firewall_note.c_str());
         wprintf(L"  (No registry keys were modified and no backup file was created).\n\n");
         return;
     }
@@ -170,6 +185,7 @@ void print_apply_result(const ApplyResult& result) {
         if (result.skipped_count > 0) {
             wprintf(L"Settings deferred: %zu (per-adapter settings pending adapter support)\n", result.skipped_count);
         }
+        if (!result.firewall_note.empty()) wprintf(L"Note:              %ls\n", result.firewall_note.c_str());
         wprintf(L"Backup saved to:   %ls\n\n", result.backup_path.c_str());
         wprintf(L"To undo all changes at any time, run:\n"
                 L"  netshutup-legacy revert\n\n");

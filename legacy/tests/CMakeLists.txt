@@ -19,11 +19,14 @@ set(LEGACY_LIB_SOURCES
     ${PROJECT_SOURCE_DIR}/src/selftest_mask.cpp
     ${PROJECT_SOURCE_DIR}/src/selftest_report.cpp
     ${PROJECT_SOURCE_DIR}/src/selftest_runner.cpp
+    ${PROJECT_SOURCE_DIR}/src/firewall.cpp
+    ${PROJECT_SOURCE_DIR}/src/store.cpp
 )
 
 # Common settings applied to every test target.
 function(configure_test target)
     target_include_directories(${target} PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(${target} PRIVATE ole32 oleaut32 wbemuuid)
     target_compile_definitions(${target} PRIVATE
         _WIN32_WINNT=0x0601 WINVER=0x0601
         UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -87,3 +90,9 @@ foreach(t mask report runner)
     target_link_libraries(test_selftest_${t} PRIVATE iphlpapi)
     add_test(NAME selftest_${t} COMMAND test_selftest_${t})
 endforeach()
+
+# ── test_firewall ─────────────────────────────────────────────────────────────
+add_executable(test_firewall test_firewall.cpp ${LEGACY_LIB_SOURCES})
+configure_test(test_firewall)
+target_link_libraries(test_firewall PRIVATE iphlpapi)
+add_test(NAME firewall COMMAND test_firewall)
