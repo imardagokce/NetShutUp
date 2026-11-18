@@ -41,6 +41,7 @@ set(SOURCES
     src/preview.cpp
     src/elevation.cpp
     src/apply.cpp
+    src/menu.cpp
 )
 
 # Console subsystem: CLI + interactive menu (no WIN32 flag).

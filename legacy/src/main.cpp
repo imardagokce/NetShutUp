@@ -8,6 +8,7 @@
 #include "preview.h"
 #include "elevation.h"
 #include "apply.h"
+#include "menu.h"
 
 // ── Usage ─────────────────────────────────────────────────────────────────────
 
@@ -60,15 +61,20 @@ int wmain(int argc, wchar_t* argv[]) {
         return 1;
     }
 
-    // No arguments: show usage (menu not yet implemented).
-    if (argc < 2) {
+    // If no command is given, launch the interactive console menu
+    if (argc < 2 || (argc == 2 && ignore_os)) {
+        return menu::run(os);
+    }
+
+    const wchar_t* cmd = argv[1];
+
+    // ── help ──────────────────────────────────────────────────────────────────
+    if (arg_eq(cmd, L"help") || arg_eq(cmd, L"--help") || arg_eq(cmd, L"-h") || arg_eq(cmd, L"/?")) {
         wprintf(L"NetShutUp Legacy (pre-alpha) -- Windows %lu.%lu build %lu\n\n",
                 os.major, os.minor, os.build);
         print_usage();
         return 0;
     }
-
-    const wchar_t* cmd = argv[1];
 
     // ── scan ──────────────────────────────────────────────────────────────────
     if (arg_eq(cmd, L"scan")) {
