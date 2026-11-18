@@ -84,7 +84,7 @@ netshutup-modern selftest              Test every profile for real and write a r
 | | |
 |---|---|
 | Windows 10 / 11 | Everything except encrypted DNS works on both. Encrypted DNS needs **Windows 11** (build 22000+); on Windows 10 the DNS step is skipped and your DNS is not touched. |
-| Windows 7 / 8 / 8.1 | Not supported by this line; see the separate [`legacy`](https://github.com/imardagokce/NetShutUp/tree/legacy) branch. |
+| Windows 7 / 8 / 8.1 | Not supported by this line. A separate **Legacy** line is planned on the [`legacy`](https://github.com/imardagokce/NetShutUp/tree/legacy) branch (so far only planning notes, no code). |
 
 ## Safety first
 
@@ -135,7 +135,7 @@ Found a security problem? Please use the private route described in [`SECURITY.m
 ```text
 modern/    Rust application for Windows 10/11 (this branch, main)
 docs/      Design notes, roadmap and compatibility matrix
-legacy     Separate branch for Windows 7/8/8.1 (independent codebase)
+legacy     Planned, separate branch for Windows 7/8/8.1 (independent codebase; planning notes only so far)
 ```
 
 ## Contributing
