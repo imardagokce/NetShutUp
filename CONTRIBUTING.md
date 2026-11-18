@@ -14,47 +14,9 @@ Security problems are handled privately, see [`SECURITY.md`](SECURITY.md).
 
 ## Testing guide
 
-NetShutUp is **pre-alpha**. The part that changes settings has been tested with unit tests but not yet on many real computers. Your test is what proves it works.
+The full step-by-step guide for anyone, no programming knowledge needed, is **[`docs/TESTING.md`](docs/TESTING.md)** (Türkçe: [`docs/TESTING.tr.md`](docs/TESTING.tr.md)). It covers downloading and checking the file, the SmartScreen warning, running the self-test, what you will see, sending the report, and how to undo everything.
 
-### Before you start
-
-- Use **Windows 11** if you can. Everything except encrypted DNS also works on Windows 10; on Windows 10 the DNS step is skipped.
-- Close important work. During the self-test your internet may drop for a moment.
-- You need an administrator account (Windows will show a normal permission prompt).
-- It is safe to use your own computer: everything the self-test changes is undone, and it creates safety copies first (see below). If you are not comfortable, run only the read-only commands.
-
-### 1. The safe start: read-only commands
-
-These change nothing and need no administrator rights:
-
-```text
-netshutup-modern scan
-netshutup-modern preview privacy
-netshutup-modern preview performance
-netshutup-modern preview recommended
-netshutup-modern apply recommended --dry-run
-```
-
-Do the numbers and values look right for your computer? If anything looks wrong or confusing, that is a useful report already.
-
-### 2. The self-test
-
-Double-click the program (or run `netshutup-modern`) and choose **Self-test (for testers)**. Or run `netshutup-modern selftest`.
-
-What happens, in order:
-
-1. You read a short explanation and confirm (the default answer is **No**).
-2. Windows asks for administrator permission.
-3. **Safety net first:** the program exports the relevant registry keys to `%ProgramData%\NetShutUp\reg-backups` and creates a **System Restore point** (if System Protection is on and none was made in the last 24 hours; otherwise the report says so).
-4. For each profile (Privacy, Performance, Recommended) it applies the settings for real, checks them, tests encrypted DNS, **undoes everything** and checks that the computer is exactly as before.
-5. It writes a report (`.md` and `.json`) to `%ProgramData%\NetShutUp\reports` and your Desktop, and opens the folder.
-
-It takes a few minutes. Nothing is uploaded anywhere.
-
-### 3. Send the report
-
-1. Open the `.md` file and read it. It should contain no user name, computer name, Wi-Fi name or full IP/MAC addresses (addresses are masked). It does contain hardware and network facts that help us understand problems (listed in the report under "What this report contains").
-2. [Open a test report](https://github.com/imardagokce/NetShutUp/issues/new?template=test-report.yml) and attach **both** files. Add anything that surprised you.
+In short: download the release, run **Self-test (for testers)**, and attach the two report files to a [test report](https://github.com/imardagokce/NetShutUp/issues/new?template=test-report.yml). The self-test makes a System Restore point and registry export first, undoes every change it makes, and sends nothing over the network.
 
 ### If something goes wrong
 

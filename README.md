@@ -98,11 +98,11 @@ The rules the code is built around (and tests enforce):
 
 ## Help us test
 
-Real-world testing is the most valuable thing right now.
+Real-world testing is the most valuable thing right now, and you do not need to be a developer.
 
-1. Build the program (see above) or ask for a test build.
-2. Run it, choose **Self-test (for testers)** in the menu, confirm, and accept the administrator prompt. It applies each profile, checks it, undoes it, and writes a report.
-3. Read the report (see [CONTRIBUTING.md](CONTRIBUTING.md#testing-guide) for the full guide; it contains no user name, computer name, Wi-Fi name or full IP/MAC addresses), then [open a test report](https://github.com/imardagokce/NetShutUp/issues/new?template=test-report.yml) and attach both files.
+**Step-by-step guide: [`docs/TESTING.md`](docs/TESTING.md)** (Türkçe: [`docs/TESTING.tr.md`](docs/TESTING.tr.md)).
+
+In short: download the [latest release](https://github.com/imardagokce/NetShutUp/releases), run it, choose **Self-test (for testers)**, confirm, accept the administrator prompt. It applies each profile, checks it, undoes it, and writes a report (no user name, computer name, Wi-Fi name or full IP/MAC addresses). Then [open a test report](https://github.com/imardagokce/NetShutUp/issues/new?template=test-report.yml) and attach both files.
 
 <details>
 <summary>What the self-test report contains</summary>
