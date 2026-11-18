@@ -33,3 +33,5 @@ For the Modern line (Windows 10/11), see the `main` branch changelog.
 - `legacy/tests/test_preview.cpp` — Preview engine unit tests (profile flags, diff classification, pending adapter detection).
 - `legacy/tests/test_apply.cpp` — Apply and revert sandbox unit tests (dry-run isolation, apply-and-revert roundtrip, automatic rollback on write failure).
 - `legacy/tests/test_adapters.cpp` — Physical adapter enumeration and subkey GUID formatting unit tests.
+- `legacy/src/selftest.h/cpp`, `selftest_mask.h/cpp`, `selftest_report.h/cpp`, `selftest_runner.cpp` — Tester mode (`netshutup-legacy selftest [--yes] [--ignore-os]`, menu item 7 "Self-test (for testers)"): safety net (registry `.reg` export and System Restore point when available), apply → verify → revert → compare for each profile, masked `.md` and `.json` report in `%ProgramData%\NetShutUp\reports` plus a Desktop copy. Nothing is sent over the network.
+- `legacy/tests/test_selftest_mask.cpp`, `test_selftest_report.cpp`, `test_selftest_runner.cpp` — Unit tests for report masking, report output and the profile runner.
