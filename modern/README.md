@@ -9,6 +9,7 @@ The Modern product line: a single-`.exe` Rust application for Windows 10/11. The
 - Opens an arrow-key menu when run without arguments (double-click the `.exe`): scan, apply a profile, revert, exit.
 - Reads the real Windows version and lists network adapters.
 - Shows the current value of every setting it knows about and whether it differs from the Windows default. No administrator rights needed.
+- Makes sure Windows Firewall is on and blocks inbound connections by default for the Domain, Private and Public networks (every profile). On most computers this already holds and nothing changes. Skipped, with a note, when another firewall is registered with Windows.
 - Previews what a profile would change, without changing anything.
 - Applies a profile after an explicit confirmation, saving a backup first.
 - Reverts the most recent apply from that backup.
@@ -49,6 +50,7 @@ For people helping to test: choose **Self-test (for testers)** in the menu, or r
 - A backup is written to `%ProgramData%\NetShutUp\backups` and verified before the first change. If a write fails, everything done so far is rolled back.
 - A setting that was not set before is removed again on revert, not written as zero.
 - Per-adapter settings only go to physical Ethernet and Wi-Fi adapters. Virtual adapters (Wi-Fi Direct, WAN miniports, tunnels) are left alone.
+- Windows Firewall settings are skipped when another firewall (for example an antivirus suite) is registered, so two firewalls never fight over the connection. Existing allow rules are not touched.
 - TCP global settings (auto-tuning, ECN, RSS) are shown but never changed.
 - DNS is only changed when the internet works beforehand, and is put back exactly as it was (DHCP stays DHCP) if encrypted DNS does not work on your network. IPv6 DNS servers are not touched.
 
@@ -68,6 +70,6 @@ The C runtime is linked statically, so the release `.exe` runs without extra DLL
 
 Planned for `0.1.0-alpha.1`, see [`docs/design/2026-11-16-alpha-release.md`](../docs/design/2026-11-16-alpha-release.md):
 
-- Windows Firewall baseline
+- Windows Firewall strict tier (Privacy profile)
 
 Later: per-setting control (Advanced Mode) and a GUI.

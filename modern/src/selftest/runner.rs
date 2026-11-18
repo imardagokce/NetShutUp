@@ -36,6 +36,8 @@ pub trait Env {
     /// The Ethernet and Wi-Fi hardware adapters profiles apply to.
     fn adapters(&self) -> Vec<EnvAdapter>;
     fn windows_build(&self) -> u32;
+    /// The name of a registered firewall other than Windows', if any.
+    fn third_party_firewall(&self) -> Option<String>;
     fn elevated(&self) -> bool;
     fn backup_dir(&self) -> PathBuf;
     /// `YYYYMMDD-HHMMSS`.
@@ -341,6 +343,16 @@ fn environment_checks(env: &dyn Env, adapters: &[EnvAdapter]) -> (Vec<Check>, bo
         began,
     ));
 
+    if let Some(name) = env.third_party_firewall() {
+        checks.push(check(
+            "firewall.third_party",
+            "Another firewall is registered",
+            Status::Info,
+            &plan::third_party_note(&name),
+            Instant::now(),
+        ));
+    }
+
     let began = Instant::now();
     checks.push(check(
         "adapters",
@@ -430,7 +442,9 @@ fn reading_checks(
 
     for profile in profiles {
         let began = Instant::now();
-        let (planned, _dropped) = plan::plan_profile(store, profile, guids, dns_ok);
+        let third_party = env.third_party_firewall();
+        let (planned, _dropped) =
+            plan::plan_profile(store, profile, guids, dns_ok, third_party.as_deref());
         let needed = planned.iter().filter(|change| change.is_needed()).count();
         let (status, detail) = match apply::check(&planned) {
             Ok(()) => (Status::Pass, format!("{needed} change(s) would be made")),
@@ -492,7 +506,9 @@ fn cycle(
     };
     let before = snapshot(store, adapters);
 
-    let (planned, _dropped) = plan::plan_profile(store, profile, guids, dns_ok);
+    let third_party = env.third_party_firewall();
+    let (planned, _dropped) =
+        plan::plan_profile(store, profile, guids, dns_ok, third_party.as_deref());
     let dns_needed = planned.iter().filter(|c| plan::is_dns(c) && c.is_needed()).count();
     let began = Instant::now();
     let precheck = if dns_needed > 0 {
@@ -785,6 +801,7 @@ mod tests {
         dot_list: RefCell<std::collections::VecDeque<Vec<String>>>,
         /// Replaces the real sidecar restore, to simulate a failing one.
         dot_restore: Option<Result<Vec<String>, String>>,
+        third_party: Option<String>,
     }
 
     /// An in-memory DoT list.
@@ -823,6 +840,9 @@ mod tests {
         }
         fn windows_build(&self) -> u32 {
             26200
+        }
+        fn third_party_firewall(&self) -> Option<String> {
+            self.third_party.clone()
         }
         fn elevated(&self) -> bool {
             self.elevated
@@ -885,6 +905,7 @@ mod tests {
             dot: FakeDot::default(),
             dot_list: RefCell::new(Default::default()),
             dot_restore: None,
+            third_party: None,
         }
     }
 
@@ -924,6 +945,25 @@ mod tests {
     }
 
     #[test]
+    fn third_party_firewall_adds_an_info_check_and_no_firewall_writes() {
+        let mut env = env("selftest-third-party");
+        env.third_party = Some("Norton".to_string());
+
+        let report = run_it(&env);
+
+        let check = report.environment.iter().find(|c| c.id == "firewall.third_party").unwrap();
+        assert_eq!(check.status, Status::Info);
+        assert!(check.detail.contains("Norton"), "{}", check.detail);
+        assert!(failures(&report).is_empty(), "{:?}", failures(&report));
+        let wrote_firewall = env
+            .store
+            .snapshot()
+            .keys()
+            .any(|(id, _)| id.starts_with("firewall."));
+        assert!(!wrote_firewall, "no firewall setting was written");
+    }
+
+    #[test]
     fn failed_apply_is_reported_and_the_next_profile_still_runs() {
         let store = FakeStore {
             fail_id: Some("service.diagtrack"),
@@ -945,7 +985,7 @@ mod tests {
         let probe = FakeStore::default();
         let guids = [A.to_string(), B.to_string()];
         let privacy = profile::builtin().unwrap().into_iter().find(|p| p.id == "privacy").unwrap();
-        let (plan, _) = plan::plan_profile(&probe, &privacy, &guids, true);
+        let (plan, _) = plan::plan_profile(&probe, &privacy, &guids, true, None);
         let needed = plan.iter().filter(|change| change.is_needed()).count() as u32;
 
         // The apply uses exactly `needed` writes; every write after that fails.
@@ -1098,7 +1138,7 @@ mod tests {
         let probe = FakeStore::default();
         let guids = [A.to_string(), B.to_string()];
         let privacy = profile::builtin().unwrap().into_iter().find(|p| p.id == "privacy").unwrap();
-        let (plan, _) = plan::plan_profile(&probe, &privacy, &guids, true);
+        let (plan, _) = plan::plan_profile(&probe, &privacy, &guids, true, None);
         plan.iter().filter(|change| change.is_needed()).count() as u32
     }
 

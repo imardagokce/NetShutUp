@@ -47,6 +47,8 @@ It exists because "network optimization" tips on the internet are a mixed bag: s
 | **Performance** | Games and real-time apps | Turns off delayed ACK per adapter, removes the multimedia network-throttling limit, turns off peer-to-peer update sharing, and picks the faster of **Cloudflare** and **Google** DNS (DoH) by measuring. |
 | **Recommended** | Everyday use | Turns off LLMNR and peer-to-peer update sharing and moves DNS to **Cloudflare** (then Google) with DoH. Safe, widely useful, nothing that gets in the way. |
 
+Every profile also makes sure Windows Firewall is on and blocks inbound connections by default (your existing allow rules keep working). On most computers that is already the case, so this changes nothing there. If another firewall is registered with Windows (for example an antivirus suite), these settings are skipped and the preview says so.
+
 > The Home edition of Windows treats telemetry level 0 as the lowest *allowed* level, not "off". NetShutUp says so instead of claiming otherwise. Details and the tweaks that were deliberately left out are in [`docs/design/2026-11-16-alpha-release.md`](docs/design/2026-11-16-alpha-release.md).
 
 ## Quick start
@@ -119,7 +121,8 @@ Found a security problem? Please use the private route described in [`SECURITY.m
 - [x] DNS provider with encrypted DNS (DoH), real-lookup trial and automatic fallback
 - [x] Self-test mode with a masked report
 - [x] DNS-over-TLS as a second encrypted DNS method (experimental, tried when DoH does not work)
-- [ ] Windows Firewall baseline for all profiles
+- [x] Windows Firewall base tier for all profiles (on, inbound blocked by default; skipped when another firewall is registered)
+- [ ] Windows Firewall strict tier (Privacy profile)
 - [ ] First alpha release (`0.1.0-alpha.1`) with a prebuilt `.exe`
 - [ ] Advanced mode: switch individual settings on and off
 - [ ] Graphical interface

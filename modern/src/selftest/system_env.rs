@@ -66,6 +66,10 @@ impl Env for SystemEnv {
         version::get_windows_version().2
     }
 
+    fn third_party_firewall(&self) -> Option<String> {
+        crate::selftest::diagnostics::registered_third_party_firewall()
+    }
+
     fn elevated(&self) -> bool {
         elevation::is_elevated()
     }

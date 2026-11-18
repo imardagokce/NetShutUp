@@ -54,9 +54,9 @@ pub fn preview(profile_id: &str) -> ExitCode {
         return ExitCode::from(2);
     };
     let adapters = profile_adapters();
-    let plan = plan_profile(&profile, &adapters);
+    let (plan, third_party) = plan_profile(&profile, &adapters);
 
-    print_preview(&profile, &plan, &adapters);
+    print_preview(&profile, &plan, &adapters, third_party.as_deref());
     println!("\nPreview only: nothing was changed.");
     ExitCode::SUCCESS
 }
@@ -95,15 +95,17 @@ struct Prepared {
     profile: Profile,
     adapters: Vec<NetworkAdapter>,
     plan: Vec<PlannedChange>,
+    /// A registered firewall that is not Windows', if any.
+    third_party: Option<String>,
     needed: usize,
 }
 
 fn prepare(profile_id: &str) -> Option<Prepared> {
     let profile = find_profile(profile_id)?;
     let adapters = profile_adapters();
-    let plan = plan_profile(&profile, &adapters);
+    let (plan, third_party) = plan_profile(&profile, &adapters);
     let needed = plan.iter().filter(|change| change.is_needed()).count();
-    Some(Prepared { profile, adapters, plan, needed })
+    Some(Prepared { profile, adapters, plan, third_party, needed })
 }
 
 enum Nothing {
@@ -133,7 +135,7 @@ fn report_nothing(why: &Nothing) -> ExitCode {
 }
 
 fn show_preview(prepared: &Prepared) {
-    print_preview(&prepared.profile, &prepared.plan, &prepared.adapters);
+    print_preview(&prepared.profile, &prepared.plan, &prepared.adapters, prepared.third_party.as_deref());
 }
 
 /// Applies a profile after showing the changes and asking for confirmation.
@@ -670,10 +672,21 @@ fn profile_adapters() -> Vec<NetworkAdapter> {
     load_adapters().into_iter().filter(|adapter| adapter.takes_profile_settings).collect()
 }
 
-fn plan_profile(profile: &Profile, adapters: &[NetworkAdapter]) -> Vec<PlannedChange> {
+/// The plan, and the registered third-party firewall that kept the Windows
+/// Firewall settings out of it, if any.
+fn plan_profile(
+    profile: &Profile,
+    adapters: &[NetworkAdapter],
+) -> (Vec<PlannedChange>, Option<String>) {
     let guids: Vec<String> = adapters.iter().map(|adapter| adapter.guid.clone()).collect();
-    let (plan, unreadable) =
-        plan::plan_profile(&SystemStore::system(), profile, &guids, dns_available());
+    let third_party = crate::selftest::diagnostics::registered_third_party_firewall();
+    let (plan, unreadable) = plan::plan_profile(
+        &SystemStore::system(),
+        profile,
+        &guids,
+        dns_available(),
+        third_party.as_deref(),
+    );
     for guid in unreadable {
         let name = adapters
             .iter()
@@ -681,7 +694,7 @@ fn plan_profile(profile: &Profile, adapters: &[NetworkAdapter]) -> Vec<PlannedCh
             .map_or(guid.as_str(), |adapter| adapter.friendly_name.as_str());
         eprintln!("Note: the DNS settings of {name} could not be read, so DNS will not be changed there.");
     }
-    plan
+    (plan, third_party)
 }
 
 /// Encrypted DNS needs Windows 11; on older builds the DNS stage is left out
@@ -748,7 +761,12 @@ fn print_settings(title: &str, scope: Scope, adapter_guid: Option<&str>) {
     }
 }
 
-fn print_preview(profile: &Profile, plan: &[PlannedChange], adapters: &[NetworkAdapter]) {
+fn print_preview(
+    profile: &Profile,
+    plan: &[PlannedChange],
+    adapters: &[NetworkAdapter],
+    third_party: Option<&str>,
+) {
     let rows = preview_rows(plan, adapters, profile.dns.as_ref());
 
     println!("{} — {} of {} settings will change", profile.name, rows.len(), plan.len());
@@ -762,6 +780,9 @@ fn print_preview(profile: &Profile, plan: &[PlannedChange], adapters: &[NetworkA
         0 => {}
         1 => println!("  (1 setting already matches)"),
         unchanged => println!("  ({unchanged} settings already match)"),
+    }
+    if let Some(name) = third_party {
+        println!("  ({})", plan::third_party_note(name));
     }
     if profile.dns.is_some() && !dns_available() {
         println!("  (DNS: this Windows version has no encrypted DNS, so DNS will not be changed)");

@@ -227,6 +227,14 @@ const NET_CLASS_KEY: &str =
 const DOH_SERVERS_KEY: &str = r"SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DohWellKnownServers";
 const SECURITY_CENTER: &str = r"ROOT\SecurityCenter2";
 
+/// The registered firewall that is not Windows' own, if any. An unreadable
+/// list counts as none, so Windows Firewall is assumed.
+pub fn registered_third_party_firewall() -> Option<String> {
+    let products =
+        wmi::query_strings(SECURITY_CENTER, "FirewallProduct", "displayName").unwrap_or_default();
+    crate::settings::plan::third_party_firewall(&products)
+}
+
 /// The adapters, virtual adapters, registered security products and the DoH
 /// servers Windows knows. Read-only; anything unavailable is left out.
 ///

@@ -9,24 +9,56 @@ use crate::dns::Precheck;
 
 pub const DNS_SETTING: &str = "dns.resolver";
 
+pub const FIREWALL_PREFIX: &str = "firewall.";
+
+pub fn is_firewall(change: &PlannedChange) -> bool {
+    change.target.setting.id.starts_with(FIREWALL_PREFIX)
+}
+
+/// The plan without its Windows Firewall changes.
+pub fn drop_firewall(plan: Vec<PlannedChange>) -> Vec<PlannedChange> {
+    plan.into_iter().filter(|change| !is_firewall(change)).collect()
+}
+
+/// The first registered firewall product that is not Windows' own. Windows
+/// Security Center lists Windows' firewall as "Windows ..."; an empty or
+/// unreadable list means Windows Firewall is assumed.
+pub fn third_party_firewall(products: &[String]) -> Option<String> {
+    products
+        .iter()
+        .find(|name| {
+            !name.trim().is_empty() && !name.trim_start().to_lowercase().starts_with("windows")
+        })
+        .cloned()
+}
+
+/// What the preview and apply say when the firewall settings are skipped.
+pub fn third_party_note(name: &str) -> String {
+    format!("Another firewall ({name}) is registered, so Windows Firewall settings were left alone.")
+}
+
 pub fn is_dns(change: &PlannedChange) -> bool {
     change.target.setting.id == DNS_SETTING
 }
 
 /// What applying `profile` to `adapters` (GUIDs) would change. The DNS stage is
 /// included only when `dns_available`. Returns the adapters whose DNS could not
-/// be read and was left out.
+/// be read and was left out. The firewall settings are left out when
+/// `third_party_firewall` names another registered firewall.
 pub fn plan_profile(
     store: &dyn Store,
     profile: &Profile,
     adapters: &[String],
     dns_available: bool,
+    third_party_firewall: Option<&str>,
 ) -> (Vec<PlannedChange>, Vec<String>) {
     let mut targets = profile.targets(adapters);
     if dns_available {
         targets.extend(profile.dns_targets(adapters));
     }
-    drop_unreadable_dns(apply::plan(store, targets))
+    let planned = apply::plan(store, targets);
+    let planned = if third_party_firewall.is_some() { drop_firewall(planned) } else { planned };
+    drop_unreadable_dns(planned)
 }
 
 /// An adapter whose DNS cannot be read cannot be backed up. Leave only its DNS
@@ -151,11 +183,11 @@ mod tests {
         let store = FakeStore::default();
         let guids = ["{A}".to_string(), "{B}".to_string()];
 
-        let (with_dns, dropped) = plan_profile(&store, &privacy(), &guids, true);
+        let (with_dns, dropped) = plan_profile(&store, &privacy(), &guids, true, None);
         assert_eq!(dns_rows(&with_dns), 2);
         assert!(dropped.is_empty());
 
-        let (without_dns, _) = plan_profile(&store, &privacy(), &guids, false);
+        let (without_dns, _) = plan_profile(&store, &privacy(), &guids, false, None);
         assert_eq!(dns_rows(&without_dns), 0);
         assert!(without_dns.len() < with_dns.len());
     }
@@ -165,10 +197,54 @@ mod tests {
         let store = FakeStore { unreadable_id: Some("dns.resolver"), ..Default::default() };
         let guids = ["{A}".to_string(), "{B}".to_string()];
 
-        let (plan, dropped) = plan_profile(&store, &privacy(), &guids, true);
+        let (plan, dropped) = plan_profile(&store, &privacy(), &guids, true, None);
 
         assert_eq!(dns_rows(&plan), 0);
         assert_eq!(dropped, ["{A}", "{B}"]);
         assert!(!plan.is_empty(), "the rest of the profile still applies");
+    }
+
+    fn firewall_rows(plan: &[PlannedChange]) -> usize {
+        plan.iter().filter(|change| is_firewall(change)).count()
+    }
+
+    #[test]
+    fn third_party_firewall_ignores_windows_and_empty_lists() {
+        let list = |names: &[&str]| -> Vec<String> { names.iter().map(|n| n.to_string()).collect() };
+        assert_eq!(third_party_firewall(&list(&["Windows Defender Firewall"])), None);
+        assert_eq!(third_party_firewall(&list(&["WINDOWS firewall"])), None);
+        assert_eq!(third_party_firewall(&[]), None);
+        assert_eq!(
+            third_party_firewall(&list(&["Windows Defender Firewall", "Norton Security"])),
+            Some("Norton Security".to_string())
+        );
+    }
+
+    #[test]
+    fn plan_profile_drops_firewall_changes_when_a_third_party_firewall_is_registered() {
+        let store = FakeStore::default();
+        let guids = ["{A}".to_string()];
+
+        let (with, _) = plan_profile(&store, &privacy(), &guids, true, None);
+        assert!(firewall_rows(&with) > 0);
+        let (without, _) = plan_profile(&store, &privacy(), &guids, true, Some("Norton"));
+        assert_eq!(firewall_rows(&without), 0);
+        assert_eq!(without.len(), with.len() - firewall_rows(&with), "the rest is unchanged");
+    }
+
+    #[test]
+    fn firewall_changes_stay_when_there_is_no_third_party_firewall() {
+        let store = FakeStore::default();
+        let (plan, _) = plan_profile(&store, &privacy(), &[], false, None);
+        assert_eq!(firewall_rows(&plan), 6);
+        assert!(plan.iter().filter(|c| is_firewall(c)).all(|c| c.is_needed()));
+    }
+
+    #[test]
+    fn the_preview_note_names_the_other_firewall() {
+        assert_eq!(
+            third_party_note("Norton"),
+            "Another firewall (Norton) is registered, so Windows Firewall settings were left alone."
+        );
     }
 }
