@@ -5,6 +5,7 @@
 #include <cstring>
 #include "version.h"
 #include "scan.h"
+#include "preview.h"
 
 // ── Usage ─────────────────────────────────────────────────────────────────────
 
@@ -41,9 +42,18 @@ int wmain(int argc, wchar_t* argv[]) {
 
     OsVersion os = get_os_version();
 
-    if (!os.is_supported()) {
+    bool ignore_os = false;
+    for (int i = 1; i < argc; ++i) {
+        if (arg_eq(argv[i], L"--ignore-os")) {
+            ignore_os = true;
+            break;
+        }
+    }
+
+    if (!os.is_supported() && !ignore_os) {
         wprintf(L"Error: Windows %lu.%lu is not supported by NetShutUp Legacy.\n"
-                L"This program targets Windows 7 SP1, 8, and 8.1.\n",
+                L"This program targets Windows 7 SP1, 8, and 8.1.\n"
+                L"(Use --ignore-os to run read-only diagnostics on this machine)\n",
                 os.major, os.minor);
         return 1;
     }
@@ -67,7 +77,21 @@ int wmain(int argc, wchar_t* argv[]) {
 
     // ── preview ───────────────────────────────────────────────────────────────
     if (arg_eq(cmd, L"preview")) {
-        wprintf(L"preview: not yet implemented.\n");
+        if (argc < 3) {
+            wprintf(L"Error: 'preview' requires a profile name.\n"
+                    L"Profiles: privacy | performance | recommended\n");
+            return 1;
+        }
+
+        const wchar_t* profile = argv[2];
+        auto preview_res = preview::generate(profile, os.os_mask());
+        if (!preview_res.has_value()) {
+            wprintf(L"Error: Unknown profile '%ls'.\n"
+                    L"Profiles: privacy | performance | recommended\n", profile);
+            return 1;
+        }
+
+        preview::print_preview(*preview_res);
         return 0;
     }
 

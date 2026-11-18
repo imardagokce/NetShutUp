@@ -25,6 +25,13 @@ struct OsVersion {
         // Supported: Windows 7 SP1 (6.1.7601), 8 (6.2), 8.1 (6.3)
         return (major == 6 && minor >= 1 && minor <= 3);
     }
+
+    DWORD os_mask() const {
+        if (is_windows_7())   return 1u << 0; // OS_WIN7
+        if (is_windows_8())   return 1u << 1; // OS_WIN8
+        if (is_windows_8_1()) return 1u << 2; // OS_WIN81
+        return (1u << 0) | (1u << 1) | (1u << 2); // OS_ALL for simulation/testing
+    }
 };
 
 // Returns the real OS version via RtlGetVersion.

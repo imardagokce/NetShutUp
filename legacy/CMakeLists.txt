@@ -37,6 +37,8 @@ set(SOURCES
     src/registry.cpp
     src/catalog.cpp
     src/scan.cpp
+    src/backup.cpp
+    src/preview.cpp
 )
 
 # Console subsystem: CLI + interactive menu (no WIN32 flag).

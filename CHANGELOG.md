@@ -22,4 +22,8 @@ For the Modern line (Windows 10/11), see the `main` branch changelog.
 - `legacy/src/registry.h/cpp` — RAII registry wrapper; read, write, delete, enumerate (sandbox-safe).
 - `legacy/src/catalog.h/cpp` — Settings catalog: 6 verified Win7/8/8.1 entries across Privacy and Performance profiles.
 - `legacy/src/scan.h/cpp` — Read-only `scan` command; reads all global-scope catalog entries, reports current vs. default.
+- `legacy/src/backup.h/cpp` — Backup and restore engine: UTF-8 `.nsub` plain text serialization, atomic verification before apply, restoration of values and deleted ("not set") states.
+- `legacy/src/preview.h/cpp` — Read-only `preview <profile>` command: diff calculation against catalog targets with formatted table and change summary.
 - `legacy/tests/test_registry.cpp` — Registry sandbox unit tests (7 cases, all under `HKCU\Software\NetShutUp-Test`).
+- `legacy/tests/test_backup.cpp` — Backup engine sandbox unit tests (save/load roundtrip, corruption handling, value restore, deletion restore, path generation).
+- `legacy/tests/test_preview.cpp` — Preview engine unit tests (profile flags, diff classification, pending adapter detection).

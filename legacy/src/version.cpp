@@ -5,7 +5,9 @@
 // would require linking against ntdll.lib directly.
 
 #include "version.h"
-#include <ntstatus.h>
+
+// NTSTATUS is LONG; STATUS_SUCCESS is 0.
+constexpr LONG STATUS_SUCCESS_VAL = 0;
 
 // Keep ntdll.h out of the global namespace — just use the function signature.
 using RtlGetVersionFn = LONG(WINAPI*)(PRTL_OSVERSIONINFOW);
@@ -31,7 +33,7 @@ OsVersion get_os_version() {
     RTL_OSVERSIONINFOW info{};
     info.dwOSVersionInfoSize = sizeof(info);
 
-    if (fn(&info) == STATUS_SUCCESS) {
+    if (fn(&info) == STATUS_SUCCESS_VAL) {
         v.major = info.dwMajorVersion;
         v.minor = info.dwMinorVersion;
         v.build = info.dwBuildNumber;

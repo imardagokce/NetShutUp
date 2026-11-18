@@ -30,9 +30,17 @@ static int g_failed = 0;
 // Subkey used by all tests; cleaned up in teardown().
 static constexpr wchar_t TESTKEY[] = L"Software\\NetShutUp-Test\\registry_test";
 
+static void delete_key_tree(HKEY hive, const wchar_t* subkey) {
+    auto subs = enum_subkeys(hive, subkey);
+    for (const auto& child : subs) {
+        std::wstring child_path = std::wstring(subkey) + L"\\" + child;
+        delete_key_tree(hive, child_path.c_str());
+    }
+    RegDeleteKeyW(hive, subkey);
+}
+
 static void teardown() {
-    // Best-effort cleanup; ignore errors.
-    RegDeleteKeyW(HKEY_CURRENT_USER, TESTKEY);
+    delete_key_tree(HKEY_CURRENT_USER, TESTKEY);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

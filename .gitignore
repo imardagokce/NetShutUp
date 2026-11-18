@@ -426,3 +426,21 @@ FodyWeavers.xsd
 
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
+
+# CMake build directories
+build/
+legacy/build/
+
+# NetShutUp backups
+backups/
+legacy/backups/
+
+# AI Agent Guides
+CLAUDE.md
+GEMINI.md
+
+# Rust build artifacts
+target/
+modern/
+modern/target/
+

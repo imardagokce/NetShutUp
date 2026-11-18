@@ -11,6 +11,8 @@ set(LEGACY_LIB_SOURCES
     ${PROJECT_SOURCE_DIR}/src/catalog.cpp
     ${PROJECT_SOURCE_DIR}/src/version.cpp
     ${PROJECT_SOURCE_DIR}/src/scan.cpp
+    ${PROJECT_SOURCE_DIR}/src/backup.cpp
+    ${PROJECT_SOURCE_DIR}/src/preview.cpp
 )
 
 # Common settings applied to every test target.
@@ -38,3 +40,19 @@ add_executable(test_registry
 )
 configure_test(test_registry)
 add_test(NAME registry COMMAND test_registry)
+
+# ── test_backup ───────────────────────────────────────────────────────────────
+add_executable(test_backup
+    test_backup.cpp
+    ${LEGACY_LIB_SOURCES}
+)
+configure_test(test_backup)
+add_test(NAME backup COMMAND test_backup)
+
+# ── test_preview ──────────────────────────────────────────────────────────────
+add_executable(test_preview
+    test_preview.cpp
+    ${LEGACY_LIB_SOURCES}
+)
+configure_test(test_preview)
+add_test(NAME preview COMMAND test_preview)

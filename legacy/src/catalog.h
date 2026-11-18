@@ -10,6 +10,7 @@
 // source of OS-level compatibility claims.
 
 #include <windows.h>
+#include <cstddef>
 
 namespace netshutup::catalog {
 
