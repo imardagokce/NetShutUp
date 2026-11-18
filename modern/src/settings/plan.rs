@@ -1,8 +1,8 @@
 //! Building the plan of a profile, and the DNS-specific rules around it. Used
 //! by the commands and by the self-test, so both plan exactly the same way.
 
-use super::apply::{self, PlannedChange};
-use super::profile::Profile;
+use super::apply::{self, PlannedChange, Target};
+use super::profile::{OptionalItem, Profile};
 use super::reader::State;
 use super::store::Store;
 use crate::dns::Precheck;
@@ -35,6 +35,59 @@ pub fn third_party_firewall(products: &[String]) -> Option<String> {
 /// What the preview and apply say when the firewall settings are skipped.
 pub fn third_party_note(name: &str) -> String {
     format!("Another firewall ({name}) is registered, so Windows Firewall settings were left alone.")
+}
+
+/// An optional item that would change something, with the change it would make.
+#[derive(Clone)]
+pub struct OptionalChange {
+    pub item: OptionalItem,
+    pub change: PlannedChange,
+}
+
+/// The optional items of `profile` with what each would change. None when
+/// `third_party` names another registered firewall.
+fn planned_optional(
+    store: &dyn Store,
+    profile: &Profile,
+    third_party: Option<&str>,
+) -> Vec<OptionalChange> {
+    if third_party.is_some() {
+        return Vec::new();
+    }
+    let (items, targets): (Vec<OptionalItem>, Vec<Target>) =
+        profile.optional_targets().into_iter().unzip();
+    items
+        .into_iter()
+        .zip(apply::plan(store, targets))
+        .map(|(item, change)| OptionalChange { item, change })
+        .collect()
+}
+
+/// The optional items that would change something and can be applied. Each one
+/// is asked about after the main confirmation; none when a third-party firewall
+/// is registered.
+pub fn optional_changes(
+    store: &dyn Store,
+    profile: &Profile,
+    third_party: Option<&str>,
+) -> Vec<OptionalChange> {
+    planned_optional(store, profile, third_party)
+        .into_iter()
+        .filter(|optional| {
+            optional.change.is_needed()
+                && apply::check(std::slice::from_ref(&optional.change)).is_ok()
+        })
+        .collect()
+}
+
+/// Every optional item as if approved, for the self-test. Empty when
+/// `third_party` names another registered firewall.
+pub fn all_optional_changes(
+    store: &dyn Store,
+    profile: &Profile,
+    third_party: Option<&str>,
+) -> Vec<PlannedChange> {
+    planned_optional(store, profile, third_party).into_iter().map(|o| o.change).collect()
 }
 
 pub fn is_dns(change: &PlannedChange) -> bool {
@@ -238,6 +291,55 @@ mod tests {
         let (plan, _) = plan_profile(&store, &privacy(), &[], false, None);
         assert_eq!(firewall_rows(&plan), 6);
         assert!(plan.iter().filter(|c| is_firewall(c)).all(|c| c.is_needed()));
+    }
+
+    fn dword(value: u32) -> State {
+        State::Value(Value::Dword(value))
+    }
+
+    fn optional_ids(changes: &[OptionalChange]) -> Vec<&str> {
+        changes.iter().map(|change| change.item.id.as_str()).collect()
+    }
+
+    #[test]
+    fn optional_changes_only_lists_items_that_would_change() {
+        let store = FakeStore::default();
+        store.seed("firewall.public.network_discovery", None, dword(0));
+        store.seed("firewall.public.file_printer_sharing", None, dword(1));
+        store.seed("firewall.public.remote_assistance", None, dword(0));
+
+        let changes = optional_changes(&store, &privacy(), None);
+
+        assert_eq!(optional_ids(&changes), ["firewall.rule.block_telemetry", "firewall.public.file_printer_sharing"]);
+    }
+
+    #[test]
+    fn optional_changes_are_empty_with_a_third_party_firewall() {
+        let store = FakeStore::default();
+        assert!(optional_changes(&store, &privacy(), Some("Norton")).is_empty());
+        assert!(all_optional_changes(&store, &privacy(), Some("Norton")).is_empty());
+    }
+
+    #[test]
+    fn optional_changes_skip_an_item_that_cannot_be_read() {
+        let store = FakeStore { unreadable_id: Some("firewall.rule.block_telemetry"), ..Default::default() };
+
+        let changes = optional_changes(&store, &privacy(), None);
+
+        assert_eq!(
+            optional_ids(&changes),
+            [
+                "firewall.public.network_discovery",
+                "firewall.public.file_printer_sharing",
+                "firewall.public.remote_assistance",
+            ]
+        );
+    }
+
+    #[test]
+    fn all_optional_changes_covers_every_optional_item_for_the_self_test() {
+        let store = FakeStore::default();
+        assert_eq!(all_optional_changes(&store, &privacy(), None).len(), 4);
     }
 
     #[test]

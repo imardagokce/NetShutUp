@@ -14,7 +14,7 @@ use crate::menu::{self, Actions, ProfileChoice, Resume};
 use crate::settings::apply::{self, ApplyError, PlannedChange};
 use crate::settings::backup::{self, Backup};
 use crate::settings::catalog::{self, CATALOG, Scope};
-use crate::settings::plan::{self, DNS_SETTING, dns_trial_scope, is_dns, plan_for_precheck};
+use crate::settings::plan::{self, DNS_SETTING, OptionalChange, dns_trial_scope, is_dns, plan_for_precheck};
 use crate::settings::profile::{self, Choose, DnsSpec, Profile};
 use crate::settings::provider;
 use crate::settings::reader::{self, Origin};
@@ -55,8 +55,10 @@ pub fn preview(profile_id: &str) -> ExitCode {
     };
     let adapters = profile_adapters();
     let (plan, third_party) = plan_profile(&profile, &adapters);
+    let optional = optional_items(&profile, third_party.as_deref());
 
-    print_preview(&profile, &plan, &adapters, third_party.as_deref());
+    print_preview(&profile, &plan, &adapters, third_party.as_deref(), &optional);
+    print_would_ask(&optional);
     println!("\nPreview only: nothing was changed.");
     ExitCode::SUCCESS
 }
@@ -97,6 +99,8 @@ struct Prepared {
     plan: Vec<PlannedChange>,
     /// A registered firewall that is not Windows', if any.
     third_party: Option<String>,
+    /// Optional items that would change something; each is asked before the apply.
+    optional: Vec<OptionalChange>,
     needed: usize,
 }
 
@@ -104,8 +108,9 @@ fn prepare(profile_id: &str) -> Option<Prepared> {
     let profile = find_profile(profile_id)?;
     let adapters = profile_adapters();
     let (plan, third_party) = plan_profile(&profile, &adapters);
+    let optional = optional_items(&profile, third_party.as_deref());
     let needed = plan.iter().filter(|change| change.is_needed()).count();
-    Some(Prepared { profile, adapters, plan, third_party, needed })
+    Some(Prepared { profile, adapters, plan, third_party, optional, needed })
 }
 
 enum Nothing {
@@ -115,7 +120,7 @@ enum Nothing {
 
 /// Why applying would write nothing, if it would not.
 fn nothing_to_write(prepared: &Prepared) -> Option<Nothing> {
-    if prepared.needed == 0 {
+    if prepared.needed == 0 && prepared.optional.is_empty() {
         return Some(Nothing::Matches);
     }
     apply::check(&prepared.plan).err().map(Nothing::Blocked)
@@ -135,7 +140,13 @@ fn report_nothing(why: &Nothing) -> ExitCode {
 }
 
 fn show_preview(prepared: &Prepared) {
-    print_preview(&prepared.profile, &prepared.plan, &prepared.adapters, prepared.third_party.as_deref());
+    print_preview(
+        &prepared.profile,
+        &prepared.plan,
+        &prepared.adapters,
+        prepared.third_party.as_deref(),
+        &prepared.optional,
+    );
 }
 
 /// Applies a profile after showing the changes and asking for confirmation.
@@ -147,6 +158,7 @@ pub fn apply(profile_id: &str, dry_run: bool, elevated_copy: bool) -> ExitCode {
     show_preview(&prepared);
 
     if dry_run {
+        print_would_ask(&prepared.optional);
         println!("\nDry run: nothing was changed.");
         return ExitCode::SUCCESS;
     }
@@ -185,21 +197,26 @@ pub fn menu_apply(profile_id: &str, ask: &mut dyn FnMut(&str) -> bool) -> Flow {
     }
 }
 
-/// Asks for confirmation, saves the backup and writes. Needs administrator rights.
+/// Asks for confirmation, then each optional item, then saves one backup and
+/// writes. Needs administrator rights. With nothing to change in the main plan
+/// there is nothing to confirm, so only the optional questions are asked.
 fn write_profile(
     prepared: &Prepared,
     ask: &mut dyn FnMut(&str) -> bool,
     undo_hint: &str,
 ) -> ExitCode {
-    if !ask(&format!("Apply {}? A backup is saved first.", count(prepared.needed, "change"))) {
+    if prepared.needed > 0
+        && !ask(&format!("Apply {}? A backup is saved first.", count(prepared.needed, "change")))
+    {
         println!("Cancelled. Nothing was changed.");
         return ExitCode::SUCCESS;
     }
 
+    let mut plan = with_approved_optional(&prepared.plan, &prepared.optional, ask);
+
     // Encrypted DNS is only changed when it can be proven afterwards: without
     // a working internet connection it is left alone.
-    let dns_needed = prepared.plan.iter().filter(|c| is_dns(c) && c.is_needed()).count();
-    let mut plan = prepared.plan.clone();
+    let dns_needed = plan.iter().filter(|c| is_dns(c) && c.is_needed()).count();
     if dns_needed > 0 {
         let precheck = dns::precheck(&SystemResolver, version::get_windows_version().2);
         if let Some(text) = dns::precheck_message(&precheck) {
@@ -272,6 +289,23 @@ fn write_profile(
             ExitCode::FAILURE
         }
     }
+}
+
+/// The plan with the optional items the user approved. Each question is asked
+/// once, in order; only a yes adds its change, so approved changes share the
+/// plan's single backup.
+fn with_approved_optional(
+    plan: &[PlannedChange],
+    optional: &[OptionalChange],
+    ask: &mut dyn FnMut(&str) -> bool,
+) -> Vec<PlannedChange> {
+    let mut plan = plan.to_vec();
+    for item in optional {
+        if ask(&item.item.question) {
+            plan.push(item.change.clone());
+        }
+    }
+    plan
 }
 
 /// A failed DNS write is a problem on this computer or in NetShutUp, not a
@@ -432,7 +466,7 @@ Self-test (for testers)
 
 This applies each profile (Privacy, Performance, Recommended) one after another and undoes it
 again. It takes a few minutes and your internet may drop for a moment. Everything is reverted;
-the backups are kept.
+the backups are kept. The optional firewall items of Privacy are tried too, and undone again.
 
 It also notes diagnostic information about your hardware and network environment, without
 personal identifiers. It is written only to a file on this computer; nothing is sent anywhere.";
@@ -697,6 +731,11 @@ fn plan_profile(
     (plan, third_party)
 }
 
+/// The optional items of a profile that would change something.
+fn optional_items(profile: &Profile, third_party: Option<&str>) -> Vec<OptionalChange> {
+    plan::optional_changes(&SystemStore::system(), profile, third_party)
+}
+
 /// Encrypted DNS needs Windows 11; on older builds the DNS stage is left out
 /// of the plan altogether (the rest of the profile is unaffected).
 fn dns_available() -> bool {
@@ -766,6 +805,7 @@ fn print_preview(
     plan: &[PlannedChange],
     adapters: &[NetworkAdapter],
     third_party: Option<&str>,
+    optional: &[OptionalChange],
 ) {
     let rows = preview_rows(plan, adapters, profile.dns.as_ref());
 
@@ -780,6 +820,10 @@ fn print_preview(
         0 => {}
         1 => println!("  (1 setting already matches)"),
         unchanged => println!("  ({unchanged} settings already match)"),
+    }
+    if !optional.is_empty() {
+        println!("\nOptional (you will be asked):");
+        print_table(["Setting", "Current", "After"], &optional_rows(optional));
     }
     if let Some(name) = third_party {
         println!("  ({})", plan::third_party_note(name));
@@ -810,6 +854,32 @@ fn preview_rows(
             ]
         })
         .collect()
+}
+
+/// One `[setting, current, after]` row per optional item.
+fn optional_rows(optional: &[OptionalChange]) -> Vec<[String; 3]> {
+    optional
+        .iter()
+        .map(|item| {
+            let setting = item.change.target.setting;
+            [
+                setting.name.to_string(),
+                reader::format(setting, &item.change.current),
+                reader::format_desired(setting, &item.change.target.desired),
+            ]
+        })
+        .collect()
+}
+
+/// What a dry run or preview says it would ask, one line per optional item.
+fn would_ask_lines(optional: &[OptionalChange]) -> Vec<String> {
+    optional.iter().map(|item| format!("would ask: {}", item.item.question)).collect()
+}
+
+fn print_would_ask(optional: &[OptionalChange]) {
+    for line in would_ask_lines(optional) {
+        println!("{line}");
+    }
 }
 
 /// One `[setting, now, restored to]` row per setting in a backup.
@@ -879,6 +949,9 @@ fn or_dash(value: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::backup::testing::temp_dir;
+    use crate::settings::reader::{State, Value};
+    use crate::settings::store::testing::FakeStore;
 
     #[test]
     fn nothing_to_write_is_reported_without_asking_for_admin() {
@@ -934,5 +1007,71 @@ mod tests {
     fn a_real_change_needs_admin_first() {
         assert_eq!(route(false, false), Route::NeedsAdmin);
         assert_eq!(route(false, true), Route::Proceed);
+    }
+
+    fn privacy() -> Profile {
+        profile::builtin().unwrap().into_iter().find(|p| p.id == "privacy").unwrap()
+    }
+
+    fn dword(value: u32) -> State {
+        State::Value(Value::Dword(value))
+    }
+
+    /// A fresh system: the telemetry rule is absent and file sharing is on,
+    /// so two of the four optional items would change something.
+    fn fresh_optional() -> (FakeStore, Vec<OptionalChange>) {
+        let store = FakeStore::default();
+        store.seed("firewall.public.network_discovery", None, dword(0));
+        store.seed("firewall.public.file_printer_sharing", None, dword(1));
+        store.seed("firewall.public.remote_assistance", None, dword(0));
+        let optional = plan::optional_changes(&store, &privacy(), None);
+        (store, optional)
+    }
+
+    #[test]
+    fn preview_lists_optional_items_and_only_says_what_it_would_ask() {
+        let (_store, optional) = fresh_optional();
+
+        let rows = optional_rows(&optional);
+        assert_eq!(
+            rows.iter().map(|row| row[0].as_str()).collect::<Vec<_>>(),
+            ["Telemetry service outbound block", "File and printer sharing rules (Public)"]
+        );
+        let lines = would_ask_lines(&optional);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("would ask: Block the Windows telemetry service"), "{}", lines[0]);
+        assert!(lines[1].starts_with("would ask: Turn off file and printer sharing rules"), "{}", lines[1]);
+    }
+
+    #[test]
+    fn declined_optional_items_are_not_applied_and_approved_ones_share_the_backup() {
+        let (store, optional) = fresh_optional();
+        let (main, _) = plan::plan_profile(&store, &privacy(), &[], false, None);
+        let main_needed = main.iter().filter(|change| change.is_needed()).count();
+
+        // Approve the telemetry rule, decline file sharing.
+        let mut asked = Vec::new();
+        let plan = with_approved_optional(&main, &optional, &mut |question| {
+            asked.push(question.to_string());
+            question.starts_with("Block the Windows telemetry")
+        });
+        assert_eq!(asked.len(), 2, "each optional item is asked once");
+
+        let dir = temp_dir("declined-optional");
+        let path = apply::apply(&store, &dir, "test", "20261118-140000", &plan).unwrap().unwrap();
+
+        let saved = backup::load(&path).unwrap();
+        assert_eq!(saved.entries.len(), main_needed + 1, "one backup holds the approved item");
+        let rule = catalog::find("firewall.rule.block_telemetry").unwrap();
+        let sharing = catalog::find("firewall.public.file_printer_sharing").unwrap();
+        assert_eq!(store.read(rule, None), dword(1));
+        assert_eq!(store.read(sharing, None), dword(1), "the declined item is untouched");
+    }
+
+    #[test]
+    fn noninteractive_context_applies_none() {
+        let (_store, optional) = fresh_optional();
+        let applied = with_approved_optional(&[], &optional, &mut |_| false);
+        assert!(applied.is_empty());
     }
 }

@@ -44,11 +44,13 @@ It exists because "network optimization" tips on the internet are a mixed bag: s
 
 | Profile | For | What it does |
 |---|---|---|
-| **Privacy** | Less telemetry, fewer leaks | Disables the telemetry service, sets the diagnostic-data policy to the lowest level, turns off LLMNR name broadcasts and peer-to-peer update sharing, and moves DNS to **Quad9** with DoH. |
+| **Privacy** | Less telemetry, fewer leaks | Disables the telemetry service, sets the diagnostic-data policy to the lowest level, turns off LLMNR name broadcasts and peer-to-peer update sharing, and moves DNS to **Quad9** with DoH. It may also ask four optional firewall questions, each answered No by default. |
 | **Performance** | Games and real-time apps | Turns off delayed ACK per adapter, removes the multimedia network-throttling limit, turns off peer-to-peer update sharing, and picks the faster of **Cloudflare** and **Google** DNS (DoH) by measuring. |
 | **Recommended** | Everyday use | Turns off LLMNR and peer-to-peer update sharing and moves DNS to **Cloudflare** (then Google) with DoH. Safe, widely useful, nothing that gets in the way. |
 
 Every profile also makes sure Windows Firewall is on and blocks inbound connections by default (your existing allow rules keep working). On most computers that is already the case, so this changes nothing there. If another firewall is registered with Windows (for example an antivirus suite), these settings are skipped and the preview says so.
+
+The Privacy profile can also ask about four optional firewall items, one question each, default No: a rule that stops the telemetry service connecting out (the program removes it again on revert), and turning off the network discovery, file and printer sharing and Remote Assistance rules on Public networks (these can stop sharing, printers or remote help on public Wi-Fi). A question is asked only when the item would change something, and none are asked when another firewall is registered.
 
 > The Home edition of Windows treats telemetry level 0 as the lowest *allowed* level, not "off". NetShutUp says so instead of claiming otherwise. Details and the tweaks that were deliberately left out are in [`docs/design/2026-11-16-alpha-release.md`](docs/design/2026-11-16-alpha-release.md).
 
@@ -123,7 +125,7 @@ Found a security problem? Please use the private route described in [`SECURITY.m
 - [x] Self-test mode with a masked report
 - [x] DNS-over-TLS as a second encrypted DNS method (experimental, tried when DoH does not work)
 - [x] Windows Firewall base tier for all profiles (on, inbound blocked by default; skipped when another firewall is registered)
-- [ ] Windows Firewall strict tier (Privacy profile)
+- [x] Windows Firewall strict tier (Privacy profile: four optional items, each asked separately, default No)
 - [ ] First alpha release (`0.1.0-alpha.1`) with a prebuilt `.exe` (prepared; published when testing is ready)
 - [ ] Advanced mode: switch individual settings on and off
 - [ ] Graphical interface

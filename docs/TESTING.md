@@ -64,7 +64,7 @@ If you would rather not change anything, you can do only [the read-only look](#s
 
 Choose **Scan current settings**. It lists your network adapters and the current value of every setting NetShutUp knows. Nothing is changed and no administrator rights are needed. Press an arrow key to return to the menu.
 
-To see what a profile would do without doing it, choose **Apply a profile → Privacy** (or another one). If it asks for administrator rights, you can say *No*: the preview is only a preview.
+To see what a profile would do without doing it, choose **Apply a profile → Privacy** (or another one). If it asks for administrator rights, you can say *No*: the preview is only a preview. In normal use the Privacy profile may also ask optional firewall questions, each with No as the default; the self-test answers yes to them and undoes them.
 
 ## Step 4 — Run the self-test
 

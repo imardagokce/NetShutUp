@@ -51,6 +51,7 @@ For people helping to test: choose **Self-test (for testers)** in the menu, or r
 - A setting that was not set before is removed again on revert, not written as zero.
 - Per-adapter settings only go to physical Ethernet and Wi-Fi adapters. Virtual adapters (Wi-Fi Direct, WAN miniports, tunnels) are left alone.
 - Windows Firewall settings are skipped when another firewall (for example an antivirus suite) is registered, so two firewalls never fight over the connection. Existing allow rules are not touched.
+- The Privacy profile may also ask about four optional firewall items, one question each, default No: a rule that stops the telemetry service connecting out (removed again on revert), and turning off the network discovery, file and printer sharing and Remote Assistance rules on Public networks. A question is asked only when the item would change something. None are asked when another firewall is registered; `preview` and `--dry-run` only print `would ask:` lines.
 - TCP global settings (auto-tuning, ECN, RSS) are shown but never changed.
 - DNS is only changed when the internet works beforehand, and is put back exactly as it was (DHCP stays DHCP) if encrypted DNS does not work on your network. IPv6 DNS servers are not touched.
 
@@ -70,6 +71,6 @@ The C runtime is linked statically, so the release `.exe` runs without extra DLL
 
 Planned for `0.1.0-alpha.1`, see [`docs/design/2026-11-16-alpha-release.md`](../docs/design/2026-11-16-alpha-release.md):
 
-- Windows Firewall strict tier (Privacy profile)
+- Alpha pre-release: version number, README, GitHub pre-release (stage 7)
 
 Later: per-setting control (Advanced Mode) and a GUI.

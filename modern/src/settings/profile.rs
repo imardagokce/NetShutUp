@@ -65,8 +65,6 @@ pub struct Assignment {
 
 /// A system setting the user is asked about before it is changed. Default
 /// answer: no.
-// Dead-code allowances stay until the question flow (next task) uses these.
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OptionalAssignment {
@@ -76,7 +74,6 @@ pub struct OptionalAssignment {
 }
 
 /// An optional item as the user sees it.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OptionalItem {
     pub id: String,
@@ -213,7 +210,6 @@ impl Profile {
 
     /// The optional items with what each would set. They are system settings,
     /// so each target has no adapter.
-    #[allow(dead_code)]
     pub fn optional_targets(&self) -> Vec<(OptionalItem, Target)> {
         self.optional
             .iter()

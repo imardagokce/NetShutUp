@@ -507,8 +507,11 @@ fn cycle(
     let before = snapshot(store, adapters);
 
     let third_party = env.third_party_firewall();
-    let (planned, _dropped) =
+    let (mut planned, _dropped) =
         plan::plan_profile(store, profile, guids, dns_ok, third_party.as_deref());
+    // The optional items are tried as if the user approved them all, so the
+    // verification, the revert and the final comparison cover them too.
+    planned.extend(plan::all_optional_changes(store, profile, third_party.as_deref()));
     let dns_needed = planned.iter().filter(|c| plan::is_dns(c) && c.is_needed()).count();
     let began = Instant::now();
     let precheck = if dns_needed > 0 {
@@ -584,6 +587,25 @@ fn cycle(
         &if wrong.is_empty() { "yes".to_string() } else { wrong.join(", ") },
         began,
     ));
+
+    if !profile.optional.is_empty() {
+        let began = Instant::now();
+        let detail = if third_party.is_some() {
+            "not tried: another firewall is registered".to_string()
+        } else {
+            let tried: Vec<&str> = to_apply
+                .iter()
+                .filter(|c| c.is_needed() && profile.optional.iter().any(|o| o.id == c.target.setting.id))
+                .map(|c| c.target.setting.name)
+                .collect();
+            if tried.is_empty() {
+                "nothing to change: already as the questions would set them".to_string()
+            } else {
+                format!("tried and undone: {}", tried.join(", "))
+            }
+        };
+        checks.push(check("optional.firewall", "Optional firewall items", Status::Info, &detail, began));
+    }
 
     if let (true, Some(spec)) = (to_apply.iter().any(plan::is_dns), profile.dns.as_ref()) {
         let (scope, originals) = plan::dns_trial_scope(&to_apply);
@@ -985,7 +1007,8 @@ mod tests {
         let probe = FakeStore::default();
         let guids = [A.to_string(), B.to_string()];
         let privacy = profile::builtin().unwrap().into_iter().find(|p| p.id == "privacy").unwrap();
-        let (plan, _) = plan::plan_profile(&probe, &privacy, &guids, true, None);
+        let (mut plan, _) = plan::plan_profile(&probe, &privacy, &guids, true, None);
+        plan.extend(plan::all_optional_changes(&probe, &privacy, None));
         let needed = plan.iter().filter(|change| change.is_needed()).count() as u32;
 
         // The apply uses exactly `needed` writes; every write after that fails.
@@ -1138,7 +1161,8 @@ mod tests {
         let probe = FakeStore::default();
         let guids = [A.to_string(), B.to_string()];
         let privacy = profile::builtin().unwrap().into_iter().find(|p| p.id == "privacy").unwrap();
-        let (plan, _) = plan::plan_profile(&probe, &privacy, &guids, true, None);
+        let (mut plan, _) = plan::plan_profile(&probe, &privacy, &guids, true, None);
+        plan.extend(plan::all_optional_changes(&probe, &privacy, None));
         plan.iter().filter(|change| change.is_needed()).count() as u32
     }
 
@@ -1271,6 +1295,35 @@ mod tests {
         let system = CATALOG.iter().filter(|s| s.scope == catalog::Scope::System).count();
         let per_adapter = CATALOG.iter().filter(|s| s.scope == catalog::Scope::Adapter).count();
         assert_eq!(taken.0.len(), system + per_adapter * 2);
+    }
+
+    #[test]
+    fn selftest_privacy_cycle_applies_and_reverts_the_optional_items() {
+        let env = env("selftest-optional");
+        let before = env.store.snapshot();
+
+        let report = run_it(&env);
+
+        assert!(failures(&report).is_empty(), "{:?}", failures(&report));
+        let privacy = cycle(&report, "privacy");
+        assert_eq!(status(privacy, "optional.firewall"), Status::Info);
+        let detail = &privacy.checks.iter().find(|c| c.id == "optional.firewall").unwrap().detail;
+        assert!(detail.contains("Telemetry service outbound block"), "{detail}");
+        assert!(report.all_restored);
+        assert_eq!(env.store.snapshot(), before, "the optional items are undone");
+    }
+
+    #[test]
+    fn selftest_snapshot_catches_a_leftover_rule() {
+        let store = FakeStore::default();
+        let before = snapshot(&store, &[]);
+        store.seed("firewall.rule.block_telemetry", None, State::Value(Value::Dword(1)));
+        let after = snapshot(&store, &[]);
+
+        let differing = differences(&before, &after);
+
+        assert_eq!(differing.len(), 1, "{differing:?}");
+        assert!(differing[0].starts_with("firewall.rule.block_telemetry (system): was"), "{differing:?}");
     }
 
     #[test]

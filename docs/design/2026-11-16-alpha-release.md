@@ -281,7 +281,8 @@ Her aşama kendi başına çalışır, test edilir ve commit edilir:
    5a (DoH) kodu tamam, gerçek makinede yazma testi bekliyor
    (`2026-11-17-dns-doh-5a.md`); 5b (DoT) sırada
 6. Güvenlik duvarı (temel kademe tüm profiller, sıkı kademe Privacy) —
-   6a temel kademe kodu tamam (`2026-11-18-firewall-6a.md`); 6b sıkı kademe sırada
+   6a temel kademe kodu tamam (`2026-11-18-firewall-6a.md`); 6b sıkı kademe kodu tamam
+   (`2026-11-18-firewall-6b.md`), gerçek makinede deneme bekliyor
 7. Sürüm numarası, README'de kullanım ve "alpha" uyarısı, GitHub ön-sürüm
 
 ## Claude'un verdiği kararlar

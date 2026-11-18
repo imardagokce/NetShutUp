@@ -64,7 +64,7 @@ Hiçbir şeyi değiştirmek istemezseniz yalnızca [salt okunur incelemeyi](#3-a
 
 **Scan current settings**'i seçin. Ağ bağdaştırıcılarınızı ve NetShutUp'ın bildiği her ayarın şu anki değerini listeler. Hiçbir şey değişmez, yönetici yetkisi gerekmez. Menüye dönmek için bir ok tuşuna basın.
 
-Bir profilin ne yapacağını yapmadan görmek için **Apply a profile → Privacy**'yi (ya da başka birini) seçin. Yönetici izni isterse *Hayır* diyebilirsiniz; bu yalnızca önizlemedir.
+Bir profilin ne yapacağını yapmadan görmek için **Apply a profile → Privacy**'yi (ya da başka birini) seçin. Yönetici izni isterse *Hayır* diyebilirsiniz; bu yalnızca önizlemedir. Normal kullanımda Privacy profili ayrıca isteğe bağlı güvenlik duvarı soruları sorabilir (her birinde varsayılan Hayır); self-test bunlara evet der ve geri alır.
 
 ## 4. Adım — Self-test'i çalıştırın
 
