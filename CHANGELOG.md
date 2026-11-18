@@ -9,6 +9,11 @@ For the Modern line (Windows 10/11), see the `main` branch changelog.
 
 ## [Unreleased]
 
+### Changed
+- C++ standard bumped from C++17 to **C++20** (MSVC 2019+). Win8+-only STL
+  primitives (`std::atomic_wait`, `std::latch`, `std::barrier`,
+  `std::counting_semaphore`) remain banned project-wide; noted in ADR-001.
+
 ### Added
 - `docs/design/ADR-001-legacy-language-selection.md` — language and runtime decision recorded (C++17 / Win32).
 - `docs/compatibility-matrix.md` updated to reflect C++/Win32 selection.

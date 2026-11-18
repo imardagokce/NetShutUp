@@ -41,8 +41,15 @@ Değerlendirilen kısıtlar:
 
 - Compiler: **MSVC** (Visual Studio Build Tools) — birincil
 - Alternatif: **MinGW-w64** (CI veya cross-build için değerlendirilebilir)
-- C++ standardı: **C++17** (MSVC 2017+ ile Win7 binary'si üretilebilir)
+- C++ standardı: **C++20** (MSVC 2019+ ile Win7 binary'si üretilebilir; bkz. not)
 - Çalışma zamanı: **Windows Runtime yok**, yalnızca Win32 API ve CRT
+
+> **C++20 ve Win7 uyumluluk notu:** C++20'nin dil özellikleri (concepts, ranges,
+> `std::span`, vb.) Win7 ile uyumludur. Ancak aşağıdaki STL primitifleri dahili
+> olarak `WaitOnAddress` API'sini (Win8+) kullanır ve Win7'de çalışmaz; bu
+> nedenle **proje genelinde yasaktırlar:**
+> `std::atomic_wait`, `std::latch`, `std::barrier`, `std::counting_semaphore`.
+> Bu kısıtlama code review ve CI ile korunur.
 
 ---
 
