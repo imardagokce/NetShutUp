@@ -24,12 +24,14 @@ set(LEGACY_LIB_SOURCES
     ${PROJECT_SOURCE_DIR}/src/dns_config.cpp
     ${PROJECT_SOURCE_DIR}/src/dns_failover.cpp
     ${PROJECT_SOURCE_DIR}/src/dns_packet.cpp
+    ${PROJECT_SOURCE_DIR}/src/dns_forward.cpp
+    ${PROJECT_SOURCE_DIR}/src/dns_doh.cpp
 )
 
 # Common settings applied to every test target.
 function(configure_test target)
     target_include_directories(${target} PRIVATE ${PROJECT_SOURCE_DIR}/src)
-    target_link_libraries(${target} PRIVATE ole32 oleaut32 wbemuuid)
+    target_link_libraries(${target} PRIVATE ole32 oleaut32 wbemuuid winhttp)
     target_compile_definitions(${target} PRIVATE
         _WIN32_WINNT=0x0601 WINVER=0x0601
         UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -101,7 +103,7 @@ target_link_libraries(test_firewall PRIVATE iphlpapi)
 add_test(NAME firewall COMMAND test_firewall)
 
 # ── dns (stage 7a) ──
-foreach(t config failover packet)
+foreach(t config failover packet forward doh)
     add_executable(test_dns_${t} test_dns_${t}.cpp ${LEGACY_LIB_SOURCES})
     configure_test(test_dns_${t})
     target_link_libraries(test_dns_${t} PRIVATE iphlpapi)
