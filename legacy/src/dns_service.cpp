@@ -4,9 +4,7 @@
 #include <shlobj.h>
 
 #include "dns_service.h"
-#include "dns_doh.h"
-#include "dns_dot.h"
-#include "dns_plain.h"
+#include "dns_real_transport.h"
 #include "dns_server.h"
 
 #include <cstdio>
@@ -15,22 +13,6 @@
 namespace netshutup::dns {
 
 namespace {
-
-// Routes each upstream to the right real transport.
-class RealTransport final : public Transport {
-public:
-    QueryResult query(const Upstream& u, const packet::Bytes& wire, unsigned timeout_ms) override {
-        return u.method == Method::DoH ? doh_.query(u, wire, timeout_ms) : dot_.query(u, wire, timeout_ms);
-    }
-    QueryResult query_legacy(const std::vector<std::wstring>& servers, const packet::Bytes& wire,
-                             unsigned timeout_ms) override {
-        return plain_.query_legacy(servers, wire, timeout_ms);
-    }
-private:
-    DohTransport   doh_;
-    DotTransport   dot_;
-    PlainTransport plain_;
-};
 
 std::wstring utc_now() {
     SYSTEMTIME st;
@@ -160,7 +142,17 @@ bool write_status_file(const std::wstring& path, const ServiceStatus& s) {
     const std::string bytes = serialize_status(s);
     const std::wstring tmp = path + L".tmp";
     HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return false;
+    if (h == INVALID_HANDLE_VALUE) {
+        // The service account may only write the status file itself, not create files in the
+        // folder: overwrite the existing file in place (it is a few hundred bytes).
+        HANDLE in_place = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (in_place == INVALID_HANDLE_VALUE) return false;
+        DWORD w = 0;
+        bool ok2 = WriteFile(in_place, bytes.data(), static_cast<DWORD>(bytes.size()), &w, nullptr) && w == bytes.size();
+        if (ok2) SetEndOfFile(in_place);
+        CloseHandle(in_place);
+        return ok2;
+    }
     DWORD written = 0;
     bool ok = WriteFile(h, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) && written == bytes.size();
     CloseHandle(h);

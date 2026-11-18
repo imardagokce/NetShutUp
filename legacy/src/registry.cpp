@@ -42,6 +42,27 @@ std::optional<DWORD> read_dword(HKEY hive,
     return data;
 }
 
+std::optional<std::wstring> read_string(HKEY hive, const wchar_t* subkey,
+                                        const wchar_t* value_name) noexcept {
+    auto key = RegKey::open(hive, subkey, KEY_QUERY_VALUE);
+    if (!key.valid()) return std::nullopt;
+
+    DWORD type = 0;
+    DWORD size = 0;
+    if (RegQueryValueExW(key.get(), value_name, nullptr, &type, nullptr, &size) != ERROR_SUCCESS ||
+        (type != REG_SZ && type != REG_EXPAND_SZ) || size > 64 * 1024) {
+        return std::nullopt;
+    }
+    std::wstring buf(size / sizeof(wchar_t) + 1, wchar_t(0));
+    DWORD got = size;
+    if (RegQueryValueExW(key.get(), value_name, nullptr, &type,
+                         reinterpret_cast<BYTE*>(buf.data()), &got) != ERROR_SUCCESS) {
+        return std::nullopt;
+    }
+    buf.resize(wcsnlen(buf.c_str(), buf.size()));
+    return buf;
+}
+
 bool key_exists(HKEY hive, const wchar_t* subkey) noexcept {
     return RegKey::open(hive, subkey, KEY_READ).valid();
 }

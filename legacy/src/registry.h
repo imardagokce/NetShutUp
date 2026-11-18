@@ -60,6 +60,11 @@ std::optional<DWORD> read_dword(HKEY hive,
 // Returns true if the key can be opened for reading (exists and is accessible).
 bool key_exists(HKEY hive, const wchar_t* subkey) noexcept;
 
+// Reads a REG_SZ (or REG_EXPAND_SZ) value. nullopt if the key/value is missing or not a string.
+std::optional<std::wstring> read_string(HKEY hive,
+                                        const wchar_t* subkey,
+                                        const wchar_t* value_name) noexcept;
+
 // Enumerates the immediate subkey names of a key.
 // Returns an empty vector if the key does not exist or cannot be opened.
 std::vector<std::wstring> enum_subkeys(HKEY hive,

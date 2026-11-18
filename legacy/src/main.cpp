@@ -11,6 +11,7 @@
 #include "menu.h"
 #include "selftest.h"
 #include "dns_service.h"
+#include "dns_flow.h"
 
 // ── Usage ─────────────────────────────────────────────────────────────────────
 
@@ -25,6 +26,7 @@ static void print_usage() {
         L"  netshutup-legacy apply <profile> --dry-run\n"
         L"                                        Simulate apply without changes\n"
         L"  netshutup-legacy revert               Undo the most recent apply\n"
+        L"  netshutup-legacy dns-status           Show the encrypted DNS service status\n"
         L"  netshutup-legacy selftest             Test every profile and write report\n"
         L"\n"
         L"Profiles: privacy | performance | recommended\n"
@@ -134,6 +136,7 @@ int wmain(int argc, wchar_t* argv[]) {
 
         auto res = apply::apply_profile(profile, os.os_mask(), dry_run);
         apply::print_apply_result(res);
+        dnsflow::after_apply(res, profile);   // real DNS stage (no-op for dry runs and failures)
         return res.success ? 0 : 1;
     }
 
@@ -152,6 +155,7 @@ int wmain(int argc, wchar_t* argv[]) {
 
         auto res = apply::revert(specific_backup);
         apply::print_revert_result(res);
+        dnsflow::after_revert(res);
         return res.success ? 0 : 1;
     }
 
@@ -166,6 +170,11 @@ int wmain(int argc, wchar_t* argv[]) {
             else if (arg_eq(argv[i], L"--port")) port = static_cast<unsigned short>(_wtoi(argv[i + 1]));
         }
         return dns::run_foreground(cfg, bind_ip, port);
+    }
+
+    // ── dns-status (read-only) ────────────────────────────────────────────────
+    if (arg_eq(cmd, L"dns-status")) {
+        return dnsflow::print_status();
     }
 
     // ── selftest ──────────────────────────────────────────────────────────────

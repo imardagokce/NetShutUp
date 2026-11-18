@@ -116,6 +116,7 @@ std::vector<PhysicalAdapter> get_physical_adapters() {
                     adapter.description = desc;
                     adapter.type = (curr->IfType == IF_TYPE_IEEE80211) ? AdapterType::WIFI : AdapterType::ETHERNET;
                     adapter.is_connected = (curr->OperStatus == IfOperStatusUp);
+                    adapter.if_index = curr->IfIndex;
 
                     result.push_back(adapter);
                 }

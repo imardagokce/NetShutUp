@@ -25,6 +25,7 @@ struct PhysicalAdapter {
     std::wstring description;   // e.g. L"Intel(R) 82579V Gigabit Network Connection"
     AdapterType  type;
     bool         is_connected;
+    unsigned long if_index = 0; // IPv4 interface index (netsh name=<index>)
 };
 
 // Enumerates all physical Ethernet and Wi-Fi adapters.

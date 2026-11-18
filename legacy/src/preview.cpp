@@ -1,6 +1,7 @@
 // preview.cpp — Read-only profile preview implementation for NetShutUp Legacy
 
 #include "preview.h"
+#include "dns_config.h"
 #include "firewall.h"
 #include "store.h"
 #include <cstdio>
@@ -140,6 +141,15 @@ void print_preview(const ProfilePreview& preview) {
     }
 
     wprintf(L"--------------------------------------------------------------------------------\n");
+    {
+        const auto chain = dns::chain_for_profile(preview.profile_name);
+        if (!chain.empty()) {
+            wprintf(L"DNS:     encrypted DNS through a local resolver service (%ls first, then %ls;\n"
+                    L"         DoH, then DoT); the original DNS stays as the last resort.\n"
+                    L"         Skipped automatically if it cannot be verified on this network.\n\n",
+                    chain.front().provider_id.c_str(), chain[chain.size() - 1].provider_id.c_str());
+        }
+    }
     wprintf(L"Summary: %zu total setting(s) in profile.\n"
             L"         %zu to change, %zu already set, %zu pending adapter support.\n\n",
             preview.items.size(),

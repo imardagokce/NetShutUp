@@ -60,6 +60,10 @@ set(SOURCES
     src/dns_status.cpp
     src/dns_server.cpp
     src/dns_service.cpp
+    src/dns_backup.cpp
+    src/dns_apply.cpp
+    src/dns_system.cpp
+    src/dns_flow.cpp
 )
 
 # Console subsystem: CLI + interactive menu (no WIN32 flag).

@@ -181,6 +181,21 @@ Güvenlik ağına kart DNS dökümü eklenir.
   (istemci tarafı sorunu gibi görünüyor; standart 53. port çalışıyor, nedeni araştırılmadı).
 - Servis hesabı için `%ProgramData%\NetShutUp` yazma izni (durum dosyası) **7d'de** verilecek.
 
+## 7d: kurulum, geçiş, geri alma (kodlandı; gerçek makinede ÇALIŞTIRILMADI)
+
+- `dns_apply` (saf akış, 14 kural + `revert_dns`) soyut `System` arayüzüne karşı yazıldı; tüm geri alma
+  yolları sahte sistemle test edilir (30'a yakın test). Gerçek makineye dokunan hiçbir test yok.
+- `dns_backup`: `<yedek>.nsub.dns` yan dosyası (kart GUID'i, arayüz indeksi, statik DNS listesi veya DHCP) ve
+  `netsh` argüman üreticileri (kart adı yerelleşir; arayüz **indeksi** kullanılır, yalnızca çıkış kodu okunur).
+- `dns_system` (gerçek `System`): SCM ile servis kurma/silme (LocalService, otomatik başlat, çökünce yeniden başlat),
+  `.exe` kopyası `%ProgramData%\NetShutUp\bin\`, `dns.cfg`, `netsh` ile kart DNS'i, 53. port denetimi,
+  uçtan uca sorgu denemesi. Servis hesabı yalnızca `dns.status` dosyasına yazabilir (dosya düzeyinde izin).
+- `dns_flow`: gerçek `apply`/`revert` (CLI ve menü) sonrası DNS aşaması. `apply::apply_profile()` içinden
+  **çağrılmaz**: testler ve selftest hiçbir zaman servis kurmaz / DNS değiştirmez (selftest entegrasyonu 7e).
+- Başarılı geri almadan sonra yan dosya "boş yedek"le etkisizleştirilir; geri alma eksik kalırsa yan dosya korunur.
+- Önceki bir apply'dan kalan servis varsa ve geri alınan yedeğin DNS yan dosyası yoksa, `revert` en yeni yan dosyayı kullanır.
+- `dns-status` komutu (salt okunur), önizlemede DNS satırı eklendi.
+
 ## Riskler
 
 - Win7'de TLS 1.2 ve kök sertifikalar doğrulanmadı; IP SAN'lı sertifika doğrulaması

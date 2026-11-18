@@ -32,6 +32,8 @@ set(LEGACY_LIB_SOURCES
     ${PROJECT_SOURCE_DIR}/src/dns_status.cpp
     ${PROJECT_SOURCE_DIR}/src/dns_server.cpp
     ${PROJECT_SOURCE_DIR}/src/dns_service.cpp
+    ${PROJECT_SOURCE_DIR}/src/dns_backup.cpp
+    ${PROJECT_SOURCE_DIR}/src/dns_apply.cpp
 )
 
 # Common settings applied to every test target.
@@ -109,7 +111,7 @@ target_link_libraries(test_firewall PRIVATE iphlpapi)
 add_test(NAME firewall COMMAND test_firewall)
 
 # ── dns (stage 7a) ──
-foreach(t config failover packet forward doh frame dot plain status server)
+foreach(t config failover packet forward doh frame dot plain status server backup apply)
     add_executable(test_dns_${t} test_dns_${t}.cpp ${LEGACY_LIB_SOURCES})
     configure_test(test_dns_${t})
     target_link_libraries(test_dns_${t} PRIVATE iphlpapi)

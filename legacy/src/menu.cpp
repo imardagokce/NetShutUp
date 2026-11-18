@@ -2,6 +2,7 @@
 
 #include "menu.h"
 #include "selftest.h"
+#include "dns_flow.h"
 #include "scan.h"
 #include "preview.h"
 #include "apply.h"
@@ -280,6 +281,7 @@ static void do_apply(HANDLE hIn, HANDLE hOut, const OsVersion& os, const wchar_t
 
     auto res = apply::apply_profile(profile, os.os_mask(), /*dry_run=*/false);
     apply::print_apply_result(res);
+    dnsflow::after_apply(res, profile);
     wait_for_key(hIn, hOut);
 }
 
@@ -305,6 +307,7 @@ static void do_revert(HANDLE hIn, HANDLE hOut) {
 
     auto res = apply::revert();
     apply::print_revert_result(res);
+    dnsflow::after_revert(res);
     wait_for_key(hIn, hOut);
 }
 
