@@ -185,13 +185,15 @@ pub fn menu_apply(profile_id: &str, ask: &mut dyn FnMut(&str) -> bool) -> Flow {
         Route::Report => {
             show_preview(&prepared);
             if let Some(why) = &nothing {
-                report_nothing(why);
+                // The menu keeps running either way; the outcome is already printed.
+                let _ = report_nothing(why);
             }
             Flow::Finished
         }
         Route::Proceed => {
             show_preview(&prepared);
-            write_profile(&prepared, ask, UNDO_HINT_MENU);
+            // The menu keeps running either way; the outcome is already printed.
+            let _ = write_profile(&prepared, ask, UNDO_HINT_MENU);
             Flow::Finished
         }
     }
@@ -402,13 +404,15 @@ pub fn menu_revert(ask: &mut dyn FnMut(&str) -> bool) -> Flow {
     match route(!found, elevation::is_elevated()) {
         Route::NeedsAdmin => Flow::NeedsAdmin,
         Route::Report => {
-            report_no_backup(&latest);
+            // The menu keeps running either way; the outcome is already printed.
+            let _ = report_no_backup(&latest);
             Flow::Finished
         }
         Route::Proceed => {
             if let Latest::Found(backup_file, saved) = &latest {
                 show_revert(saved);
-                restore_backup(backup_file, saved, ask);
+                // The menu keeps running either way; the outcome is already printed.
+                let _ = restore_backup(backup_file, saved, ask);
             }
             Flow::Finished
         }
@@ -545,7 +549,8 @@ pub fn menu_selftest(ask: &mut dyn FnMut(&str) -> bool) -> Flow {
     if !elevation::is_elevated() {
         return Flow::NeedsAdmin;
     }
-    run_selftest(ask);
+    // The menu keeps running either way; the outcome is already printed.
+    let _ = run_selftest(ask);
     Flow::Finished
 }
 
@@ -599,7 +604,8 @@ impl Actions for RealActions {
     }
 
     fn scan(&mut self) {
-        scan();
+        // The menu keeps running either way; the outcome is already printed.
+        let _ = scan();
     }
 
     fn apply(&mut self, profile_id: &str) -> Flow {
